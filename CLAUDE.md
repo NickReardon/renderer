@@ -120,6 +120,26 @@ the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of t
     - use fixed capacities for per-frame arrays;
     - never crash on user data.
 
+## Branches and pull requests
+
+The repository is private on GitHub: https://github.com/NickReardon/renderer.
+
+- **Never commit to `main` directly.** `main` always builds and passes `build.bat test`.
+- **One branch per milestone or fix,** created from an up-to-date `main`:
+  `feature/<name>` (e.g. `feature/undo`), `fix/<name>`, `docs/<name>`, `chore/<name>`.
+- **Commit on the branch as you go,** push it, and open a pull request with `gh pr create`. The
+  description says what changed and why, how it was verified (build, tests, captures), and
+  what's not done. End it with the Claude Code attribution line.
+- **Merge only after the build and all tests pass and the owner approves.** The repository
+  allows **squash merges only** (`gh pr merge --squash`): each pull request becomes one commit on
+  `main`, and GitHub deletes the branch. Afterwards: `git switch main`, `git pull`, and delete the
+  local branch.
+- **Never force-push `main` or rewrite pushed history.**
+- **Commits use the GitHub no-reply address** (`32754140+NickReardon@users.noreply.github.com`,
+  set in this repository's git config) because the owner's account blocks pushes that expose
+  their email. Don't change `user.email`.
+- **`gh` is at `C:\Program Files\GitHub CLI\gh.exe`;** it may not be on the Bash tool's PATH.
+
 ## How to work
 
 - **Build before saying a change is done,** and run `build.bat test` when `core/` or `ui/` changed.
