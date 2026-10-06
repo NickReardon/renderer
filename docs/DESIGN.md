@@ -292,3 +292,35 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
   - hot reload with FSR active works.
 - **Also added:** a VSync toggle. Off uses Immediate, falling back to Mailbox if Immediate isn't
   supported.
+
+## Anti-aliasing: 4x MSAA with a custom resolve
+
+- **Chosen:** 4× MSAA on the scene (meshes, debug lines, grid), on by default, with a toggle.
+- **Why MSAA first:**
+  - it suits a forward renderer;
+  - it smooths geometry edges at moderate cost;
+  - it gives FSR 1 the anti-aliased input AMD requires: with MSAA, FSR 50% no longer shows
+    2-pixel stair-steps.
+- **Custom resolve instead of the hardware resolve:**
+  - the scene renders into a sub-rectangle of larger targets (dynamic resolution);
+  - a hardware resolve needs equal-sized source and destination and resolves the whole texture
+    even at 50% scale;
+  - `shaders/resolve.wgsl` instead averages each pixel's samples only over the rendered area,
+    in linear light (it reads through the sRGB format, as a hardware resolve of an sRGB target
+    does).
+- **Memory:**
+  - MSAA targets exist only while MSAA is on;
+  - they grow in 256-pixel steps to the largest render size used, so dynamic resolution
+    doesn't reallocate on every adjustment;
+  - they're released when the window resizes or MSAA changes;
+  - worst case (200% at 2448×1530) is about 3840×3072 × 4 samples × 8 bytes ≈ 380 MB.
+- **Changing the sample count rebuilds the scene pipelines** (sample count is part of a
+  pipeline).
+- **Not covered:** aliasing *within* surfaces (shading, textures, thin geometry smaller than a
+  sample). The grid is already anti-aliased analytically in its shader. **TAA** (with motion
+  vectors and jitter) is the planned next step; it would also lay the groundwork for temporal
+  upscaling (FSR 2-style).
+- **Verified:** captures with no AA, MSAA, MSAA + FSR 50% and MSAA + 200% (zoomed comparison);
+  dynamic mode climbing to 200% with MSAA on ran without errors.
+- **Also:** in `--screenshot` modes the host now ignores real mouse and keyboard input. A capture
+  once came out zoomed because someone scrolled while the window was open.

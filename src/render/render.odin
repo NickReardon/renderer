@@ -52,6 +52,7 @@ Frame_Settings :: struct {
 	upscaler:        Upscaler, // used when render_scale < 1
 	sharpness_stops: f32,      // FSR RCAS: 0 = strongest sharpening, each stop halves it
 	vsync:           bool,
+	msaa_samples:    u32,      // 1 (off) or 4; anything else means 1
 }
 
 MIN_RENDER_SCALE :: 0.25
@@ -192,6 +193,19 @@ Renderer :: struct {
 	resample_pipeline:        wgpu.RenderPipeline,
 	render_size:              [2]i32, // scene resolution used for the last frame
 	render_scale:             f32,    // render_size / viewport size for the last frame
+
+	// MSAA (post.odin): multisampled color and depth the scene renders into when enabled, then
+	// averaged into scene_color by the resolve pass. Allocated only while MSAA is on, grown as
+	// the render size needs, and released when the window resizes or MSAA changes.
+	msaa_sample_count:        u32, // 1 = off
+	msaa_target_size:         [2]i32,
+	msaa_color_texture:       wgpu.Texture,
+	msaa_color_view:          wgpu.TextureView,
+	msaa_depth_texture:       wgpu.Texture,
+	msaa_depth_view:          wgpu.TextureView,
+	resolve_layout:           wgpu.BindGroupLayout,
+	resolve_group:            wgpu.BindGroup,
+	resolve_pipeline:         wgpu.RenderPipeline,
 
 	// GPU timing (post.odin): two timestamps per frame, read back a few frames later.
 	timestamps_supported:     bool,
@@ -507,6 +521,21 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 	upscaling := f32(render_size.x) < viewport_size.x || f32(render_size.y) < viewport_size.y
 	use_fsr := settings.upscaler == .Fsr && upscaling && renderer.easu_pipeline != nil && renderer.rcas_pipeline != nil
 
+	// MSAA: changing the sample count rebuilds the scene pipelines (their sample count is part of
+	// the pipeline) and drops the old multisampled targets.
+	msaa_samples: u32 = 4 if settings.msaa_samples == 4 else 1
+	if msaa_samples != renderer.msaa_sample_count {
+		renderer.msaa_sample_count = msaa_samples
+		release_msaa_targets(renderer)
+		if !create_pipelines(renderer) {
+			fmt.eprintln("render: rebuilding pipelines for the new MSAA setting failed")
+		}
+	}
+	use_msaa := renderer.msaa_sample_count > 1 && scene_visible && renderer.resolve_pipeline != nil
+	if use_msaa {
+		ensure_msaa_targets(renderer, render_size)
+	}
+
 	scene_target_size := [2]f32{f32(renderer.scene_target_size.x), f32(renderer.scene_target_size.y)}
 	render_size_float := [2]f32{f32(render_size.x), f32(render_size.y)}
 	post_uniforms := Post_Uniforms{
@@ -535,7 +564,8 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 	}
 	timing_this_frame := timing_slot >= 0
 
-	// --- Pass 1: the scene, at render resolution, into the top-left of scene_color.
+	// --- Pass 1: the scene, at render resolution, into the top-left of scene_color (or of the
+	// multisampled targets, resolved into scene_color right after).
 	if scene_visible {
 		scene_timestamps := wgpu.PassTimestampWrites{
 			querySet                  = renderer.timestamp_query_set,
@@ -543,10 +573,12 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 			endOfPassWriteIndex       = wgpu.QUERY_SET_INDEX_UNDEFINED,
 		}
 		clear_color := settings.clear_color // linear; the sRGB target encodes it
+		scene_color_target := renderer.msaa_color_view if use_msaa else renderer.scene_color_view
+		scene_depth_target := renderer.msaa_depth_view if use_msaa else renderer.scene_depth_view
 		scene_pass := wgpu.CommandEncoderBeginRenderPass(encoder, &{
 			colorAttachmentCount   = 1,
 			colorAttachments       = &wgpu.RenderPassColorAttachment{
-				view       = renderer.scene_color_view,
+				view       = scene_color_target,
 				depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
 				loadOp     = .Clear,
 				storeOp    = .Store,
@@ -554,7 +586,7 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 			},
 			// Depth clears to 0 because depth is reversed (near = 1, far = 0).
 			depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
-				view            = renderer.scene_depth_view,
+				view            = scene_depth_target,
 				depthLoadOp     = .Clear,
 				depthStoreOp    = .Discard,
 				depthClearValue = 0,
@@ -610,6 +642,25 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 
 		wgpu.RenderPassEncoderEnd(scene_pass)
 		wgpu.RenderPassEncoderRelease(scene_pass)
+	}
+
+	// --- Pass 1b: MSAA resolve, averaging the samples of the rendered area into scene_color.
+	if use_msaa {
+		resolve_pass := wgpu.CommandEncoderBeginRenderPass(encoder, &{
+			colorAttachmentCount = 1,
+			colorAttachments     = &wgpu.RenderPassColorAttachment{
+				view       = renderer.scene_color_view,
+				depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
+				loadOp     = .Load, // only the rendered area is written; no need to clear the rest
+				storeOp    = .Store,
+			},
+		})
+		wgpu.RenderPassEncoderSetViewport(resolve_pass, 0, 0, render_size_float.x, render_size_float.y, 0, 1)
+		wgpu.RenderPassEncoderSetPipeline(resolve_pass, renderer.resolve_pipeline)
+		wgpu.RenderPassEncoderSetBindGroup(resolve_pass, 0, renderer.resolve_group)
+		wgpu.RenderPassEncoderDraw(resolve_pass, vertexCount = 3, instanceCount = 1, firstVertex = 0, firstInstance = 0)
+		wgpu.RenderPassEncoderEnd(resolve_pass)
+		wgpu.RenderPassEncoderRelease(resolve_pass)
 	}
 
 	// --- Pass 2: FSR EASU, upscaling the scene to viewport size.

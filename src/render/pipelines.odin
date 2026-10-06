@@ -176,6 +176,8 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 	depth_test_and_write := wgpu.DepthStencilState{format = DEPTH_FORMAT, depthWriteEnabled = .True, depthCompare = .Greater}
 	depth_test_only := wgpu.DepthStencilState{format = DEPTH_FORMAT, depthWriteEnabled = .False, depthCompare = .Greater}
 	single_sample := wgpu.MultisampleState{count = 1, mask = 0xFFFF_FFFF}
+	// Scene pipelines match the MSAA sample count of the targets they draw into.
+	scene_multisample := wgpu.MultisampleState{count = max(renderer.msaa_sample_count, 1), mask = 0xFFFF_FFFF}
 
 	// Meshes: positions and normals in two separate vertex buffers (struct-of-arrays).
 	position_attribute := wgpu.VertexAttribute{format = .Float32x3, offset = 0, shaderLocation = 0}
@@ -195,7 +197,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		},
 		primitive    = {topology = .TriangleList, frontFace = .CCW, cullMode = .Back},
 		depthStencil = &depth_test_and_write,
-		multisample  = single_sample,
+		multisample  = scene_multisample,
 		fragment     = &wgpu.FragmentState{module = mesh_module, entryPoint = "fragment_main", targetCount = 1, targets = &scene_opaque_target},
 	})
 
@@ -216,7 +218,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		vertex       = {module = line_module, entryPoint = "vertex_main", bufferCount = 1, buffers = &line_vertex_buffer},
 		primitive    = {topology = .LineList},
 		depthStencil = &depth_test_and_write,
-		multisample  = single_sample,
+		multisample  = scene_multisample,
 		fragment     = &wgpu.FragmentState{module = line_module, entryPoint = "fragment_main", targetCount = 1, targets = &scene_opaque_target},
 	})
 
@@ -227,7 +229,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		vertex       = {module = grid_module, entryPoint = "vertex_main"},
 		primitive    = {topology = .TriangleList, cullMode = .None},
 		depthStencil = &depth_test_only,
-		multisample  = single_sample,
+		multisample  = scene_multisample,
 		fragment     = &wgpu.FragmentState{module = grid_module, entryPoint = "fragment_main", targetCount = 1, targets = &scene_blended_target},
 	})
 
@@ -258,10 +260,10 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		fragment     = &wgpu.FragmentState{module = overlay_module, entryPoint = "fragment_main", targetCount = 1, targets = &window_blended_target},
 	})
 
-	easu_pipeline, rcas_pipeline, resample_pipeline := create_post_pipelines(renderer)
+	easu_pipeline, rcas_pipeline, resample_pipeline, resolve_pipeline := create_post_pipelines(renderer)
 
 	if !pop_error_scope(renderer) {
-		for pipeline in ([]wgpu.RenderPipeline{mesh_pipeline, line_pipeline, grid_pipeline, overlay_pipeline, easu_pipeline, rcas_pipeline, resample_pipeline}) {
+		for pipeline in ([]wgpu.RenderPipeline{mesh_pipeline, line_pipeline, grid_pipeline, overlay_pipeline, easu_pipeline, rcas_pipeline, resample_pipeline, resolve_pipeline}) {
 			if pipeline != nil do wgpu.RenderPipelineRelease(pipeline)
 		}
 		return false
@@ -275,6 +277,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 	renderer.easu_pipeline = easu_pipeline
 	renderer.rcas_pipeline = rcas_pipeline
 	renderer.resample_pipeline = resample_pipeline
+	renderer.resolve_pipeline = resolve_pipeline
 	return true
 }
 
@@ -288,6 +291,7 @@ release_pipelines :: proc(renderer: ^Renderer) {
 		&renderer.easu_pipeline,
 		&renderer.rcas_pipeline,
 		&renderer.resample_pipeline,
+		&renderer.resolve_pipeline,
 	}
 	for pipeline in pipelines {
 		if pipeline^ != nil do wgpu.RenderPipelineRelease(pipeline^)

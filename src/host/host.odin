@@ -158,6 +158,16 @@ main :: proc() {
 			handle_event(&input, event, pixel_density)
 		}
 		input.window_size = window_pixel_size(window)
+		if screenshot_mode != .None {
+			// Scripted captures must be reproducible: ignore whatever the person at the computer
+			// does with the mouse and keyboard while the window is open.
+			input.keys = {}
+			input.mouse = {}
+			input.mouse_position = {-1, -1}
+			input.mouse_delta = {}
+			input.wheel = 0
+			input.text_input_length = 0
+		}
 
 		now := time.tick_now()
 		input.delta_seconds = f32(time.duration_seconds(time.tick_diff(last_tick, now)))

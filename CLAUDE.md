@@ -21,6 +21,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --render-scale=50       fixed render scale in percent (50..200)
   --upscaler=bilinear     bilinear instead of FSR 1
   --dynamic               dynamic resolution on
+  --msaa=off              no 4x MSAA
   --target-fps=120        dynamic resolution's target (default: display refresh rate)
 ```
 
@@ -46,7 +47,8 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
 - **Reverse-Z depth:** the near plane is depth 1, clear depth to 0, compare `.Greater`.
 - **Frame structure (render/):**
   - scene pass into `scene_color` (sRGB) at render resolution, within targets allocated at
-    window × 2;
+    window × 2. With MSAA it renders into the 4× multisampled targets instead, then a resolve
+    pass averages the samples into `scene_color`;
   - FSR EASU pass (below 100% only);
   - window pass: RCAS or bilinear resample into the viewport, then the UI overlay.
 

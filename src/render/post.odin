@@ -19,7 +19,8 @@ SCENE_COLOR_ENCODED_FORMAT :: wgpu.TextureFormat.RGBA8Unorm // same bytes, no sR
 UPSCALED_FORMAT            :: wgpu.TextureFormat.RGBA8Unorm // EASU output: encoded values, read by RCAS
 TIMESTAMP_BYTES            :: 2 * size_of(u64)
 
-POST_WGSL :: #load("shaders/post.wgsl", string)
+POST_WGSL    :: #load("shaders/post.wgsl", string)
+RESOLVE_WGSL :: #load("shaders/resolve.wgsl", string)
 
 // Constants for FSR EASU (FsrEasuCon in ffx_fsr1.h): map an output pixel to input texels.
 // render_size: pixels actually rendered; texture_size: size of the texture holding them;
@@ -126,9 +127,73 @@ release_scene_targets :: proc(renderer: ^Renderer) {
 	renderer.scene_target_size = {}
 }
 
-// Creates the post-pass bind group layout and uniform buffer (once, at startup).
+// Makes sure the multisampled targets can hold `render_size`. They only grow (rounded up to
+// 256-pixel steps), so dynamic resolution doesn't reallocate on every adjustment; they're
+// released when the window resizes or MSAA changes, and memory then follows actual use.
+@(private)
+ensure_msaa_targets :: proc(renderer: ^Renderer, render_size: [2]i32) {
+	if renderer.msaa_color_texture != nil && render_size.x <= renderer.msaa_target_size.x && render_size.y <= renderer.msaa_target_size.y {
+		return
+	}
+	MSAA_SIZE_STEP :: 256
+	maximum := renderer.max_texture_size if renderer.max_texture_size > 0 else 8192
+	new_size: [2]i32
+	for axis in 0 ..< 2 {
+		wanted := max(render_size[axis], renderer.msaa_target_size[axis])
+		new_size[axis] = min((wanted + MSAA_SIZE_STEP - 1) / MSAA_SIZE_STEP * MSAA_SIZE_STEP, maximum)
+	}
+	release_msaa_targets(renderer)
+	renderer.msaa_target_size = new_size
+	extent := wgpu.Extent3D{u32(new_size.x), u32(new_size.y), 1}
+
+	renderer.msaa_color_texture = wgpu.DeviceCreateTexture(renderer.device, &{
+		label         = "scene color (msaa)",
+		usage         = {.RenderAttachment, .TextureBinding},
+		dimension     = ._2D,
+		size          = extent,
+		format        = SCENE_COLOR_FORMAT,
+		mipLevelCount = 1,
+		sampleCount   = renderer.msaa_sample_count,
+	})
+	renderer.msaa_color_view = wgpu.TextureCreateView(renderer.msaa_color_texture, nil)
+	renderer.msaa_depth_texture = wgpu.DeviceCreateTexture(renderer.device, &{
+		label         = "scene depth (msaa)",
+		usage         = {.RenderAttachment},
+		dimension     = ._2D,
+		size          = extent,
+		format        = DEPTH_FORMAT,
+		mipLevelCount = 1,
+		sampleCount   = renderer.msaa_sample_count,
+	})
+	renderer.msaa_depth_view = wgpu.TextureCreateView(renderer.msaa_depth_texture, nil)
+
+	resolve_entry := wgpu.BindGroupEntry{binding = 0, textureView = renderer.msaa_color_view}
+	renderer.resolve_group = wgpu.DeviceCreateBindGroup(renderer.device, &{label = "msaa resolve", layout = renderer.resolve_layout, entryCount = 1, entries = &resolve_entry})
+}
+
+@(private)
+release_msaa_targets :: proc(renderer: ^Renderer) {
+	if renderer.resolve_group != nil do wgpu.BindGroupRelease(renderer.resolve_group)
+	if renderer.msaa_depth_view != nil do wgpu.TextureViewRelease(renderer.msaa_depth_view)
+	if renderer.msaa_depth_texture != nil do wgpu.TextureRelease(renderer.msaa_depth_texture)
+	if renderer.msaa_color_view != nil do wgpu.TextureViewRelease(renderer.msaa_color_view)
+	if renderer.msaa_color_texture != nil do wgpu.TextureRelease(renderer.msaa_color_texture)
+	renderer.resolve_group = nil
+	renderer.msaa_depth_view, renderer.msaa_depth_texture = nil, nil
+	renderer.msaa_color_view, renderer.msaa_color_texture = nil, nil
+	renderer.msaa_target_size = {}
+}
+
+// Creates the post-pass and resolve bind group layouts and the post uniform buffer (once).
 @(private)
 create_post_bindings :: proc(renderer: ^Renderer) {
+	resolve_entry := wgpu.BindGroupLayoutEntry{
+		binding    = 0,
+		visibility = {.Fragment},
+		texture    = {sampleType = .UnfilterableFloat, viewDimension = ._2D, multisampled = true},
+	}
+	renderer.resolve_layout = wgpu.DeviceCreateBindGroupLayout(renderer.device, &{label = "msaa resolve", entryCount = 1, entries = &resolve_entry})
+
 	layout_entries := [3]wgpu.BindGroupLayoutEntry{
 		{binding = 0, visibility = {.Fragment}, buffer = {type = .Uniform, minBindingSize = size_of(Post_Uniforms)}},
 		{binding = 1, visibility = {.Fragment}, texture = {sampleType = .Float, viewDimension = ._2D}},
@@ -142,12 +207,14 @@ create_post_bindings :: proc(renderer: ^Renderer) {
 release_post_bindings :: proc(renderer: ^Renderer) {
 	if renderer.post_buffer != nil do wgpu.BufferRelease(renderer.post_buffer)
 	if renderer.post_layout != nil do wgpu.BindGroupLayoutRelease(renderer.post_layout)
-	renderer.post_buffer, renderer.post_layout = nil, nil
+	if renderer.resolve_layout != nil do wgpu.BindGroupLayoutRelease(renderer.resolve_layout)
+	renderer.post_buffer, renderer.post_layout, renderer.resolve_layout = nil, nil, nil
 }
 
-// Builds the EASU, RCAS and resample pipelines. Called inside create_pipelines' error scope.
+// Builds the EASU, RCAS, resample and MSAA resolve pipelines. Called inside create_pipelines'
+// error scope.
 @(private)
-create_post_pipelines :: proc(renderer: ^Renderer) -> (easu_pipeline, rcas_pipeline, resample_pipeline: wgpu.RenderPipeline) {
+create_post_pipelines :: proc(renderer: ^Renderer) -> (easu_pipeline, rcas_pipeline, resample_pipeline, resolve_pipeline: wgpu.RenderPipeline) {
 	post_module := create_shader_module(renderer, "post.wgsl", POST_WGSL)
 	defer wgpu.ShaderModuleRelease(post_module)
 	post_pipeline_layout := wgpu.DeviceCreatePipelineLayout(renderer.device, &{label = "post", bindGroupLayoutCount = 1, bindGroupLayouts = &renderer.post_layout})
@@ -167,6 +234,12 @@ create_post_pipelines :: proc(renderer: ^Renderer) -> (easu_pipeline, rcas_pipel
 	easu_pipeline = create(renderer, "fsr easu", post_module, post_pipeline_layout, "easu_fragment_main", UPSCALED_FORMAT)
 	rcas_pipeline = create(renderer, "fsr rcas", post_module, post_pipeline_layout, "rcas_fragment_main", renderer.surface_format)
 	resample_pipeline = create(renderer, "resample", post_module, post_pipeline_layout, "resample_fragment_main", renderer.surface_format)
+
+	resolve_module := create_shader_module(renderer, "resolve.wgsl", RESOLVE_WGSL)
+	defer wgpu.ShaderModuleRelease(resolve_module)
+	resolve_pipeline_layout := wgpu.DeviceCreatePipelineLayout(renderer.device, &{label = "msaa resolve", bindGroupLayoutCount = 1, bindGroupLayouts = &renderer.resolve_layout})
+	defer wgpu.PipelineLayoutRelease(resolve_pipeline_layout)
+	resolve_pipeline = create(renderer, "msaa resolve", resolve_module, resolve_pipeline_layout, "resolve_fragment_main", SCENE_COLOR_FORMAT)
 	return
 }
 

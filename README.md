@@ -39,4 +39,5 @@ The Inspector's **Rendering** section sets the 3D view's resolution:
 
 Below 100% the image is upscaled with AMD FSR 1 (or bilinear, to compare). Above 100% it is
 supersampled: rendered larger, then filtered down. Statistics shows GPU time, the render size
-and the current mode.
+and the current mode. **MSAA 4×** (on by default) smooths geometry edges, and gives FSR the
+anti-aliased input it needs.

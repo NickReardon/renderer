@@ -130,6 +130,7 @@ init :: proc(renderer: ^Renderer, window: platform.Native_Window, window_size: [
 	wgpu.SurfaceCapabilitiesFreeMembers(capabilities)
 	renderer.gamma_correct = renderer.surface_format != .BGRA8UnormSrgb && renderer.surface_format != .RGBA8UnormSrgb
 	renderer.vsync = true
+	renderer.msaa_sample_count = 1 // end_frame applies the requested setting
 
 	create_bindings(renderer)
 	create_timestamp_resources(renderer)
@@ -149,6 +150,7 @@ shutdown :: proc(renderer: ^Renderer) {
 	release_timestamp_resources(renderer)
 	release_pipelines(renderer)
 	release_scene_targets(renderer)
+	release_msaa_targets(renderer)
 	release_post_bindings(renderer)
 	release_atlas_texture(renderer)
 	if renderer.overlay_sampler != nil do wgpu.SamplerRelease(renderer.overlay_sampler)
@@ -200,6 +202,7 @@ configure_surface :: proc(renderer: ^Renderer, size: [2]i32) {
 
 	if resized {
 		create_scene_targets(renderer, size)
+		release_msaa_targets(renderer) // recreated at the next frame's render size
 	}
 }
 
