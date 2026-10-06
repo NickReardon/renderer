@@ -88,3 +88,77 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
 - **Revisit:** at phase 3, if gameplay needs tens of thousands of interacting entities. The
   escape route is to keep `Entity` as the authoring model and generate sparse-component or
   archetype runtime tables from it.
+
+## Coordinate system: right-handed, Y up, Z depth
+
+- **Chosen:** X horizontal (right), Y vertical (up), Z depth, right-handed, so +Z points toward
+  the viewer and a camera looks down -Z. Same as Maya, Godot and OpenGL conventions. Axis colors
+  X red, Y green, Z blue. Constants: `core.WORLD_RIGHT`, `core.WORLD_UP`, `core.WORLD_FORWARD`.
+- **Alternatives:** Z up (Blender, Unreal, 3ds Max); left-handed Y up (Unity, D3D tradition).
+- **Why:** the owner's choice. Y-up matches how screen space reads (x across, y up) and most
+  game and graphics references. Right-handedness matches the cross-product and winding
+  conventions used throughout the math (counter-clockwise = front-facing).
+- **Enforced by:** `test_coordinate_system_is_right_handed` in `core_test.odin`.
+
+## Depth: reverse-Z, infinite far plane, 32-bit float
+
+- **Chosen:** clip depth 1 at the near plane falling to 0 at infinity; `Depth32Float`; clear to
+  0; compare `.Greater`.
+- **Why:** float precision is concentrated near 0, and the perspective divide needs it far away;
+  reversing the range cancels the two out, so there's almost no z-fighting at distance and no far
+  plane to tune (Nathan Reed, *Depth Precision Visualized*).
+
+## Editor UX: Unity scene-view style
+
+- **Chosen:** Unity's scene-view navigation (Alt+left orbit, middle pan, Alt+right or wheel zoom,
+  right-drag flythrough with WASD/QE, F to frame) and, when the editor gets them, Unity-style
+  transform gizmos and QWERTY tool keys. Applied in our right-handed, Y-up space; Unity itself is
+  left-handed.
+- **Alternatives:** Blender's keymap (middle-mouse orbit, G/R/S modal transforms), Maya's.
+- **Why:** the owner's preference. A Blender keymap can be added later as a second preset; the
+  reference Modeler3D supports both.
+
+## Hot reload: host executable + game DLL
+
+- **Chosen:**
+  - `engine.exe` (host) owns the window and main loop, and loads `game.dll`;
+  - each build replaces `game.dll`, and the host loads a *copy* (`game_<n>.dll`) so the file
+    stays writable;
+  - persistent state is one `Game_Memory` block passed to each new DLL;
+  - if `size_of(Game_Memory)` changes, the game restarts instead (F6 forces a restart);
+  - old DLLs stay loaded until exit;
+  - shaders are embedded in the DLL with `#load` and rebuilt on reload inside a validation
+    error scope, so a broken shader reports its error and the last working pipelines stay.
+- **Details that matter:**
+  - game procedures run with the host's `context`, so allocators live in the never-unloaded exe;
+  - wgpu is linked as a shared library (`WGPU_SHARED`) so every DLL copy uses the same wgpu
+    state;
+  - the build writes `game_tmp.dll` and renames it, so the host never sees a half-written file;
+  - a unique PDB name per build avoids link failures while a previous build is loaded.
+- **Known limit:** a change that keeps `Game_Memory`'s size but changes its layout (e.g. swapping
+  two fields of the same type) is not detected; press F6.
+- **Verified:** reloading with unchanged code, with a deliberately broken shader (error printed
+  with the right file line, old pipelines kept) and with the fix, all while the engine ran.
+
+## Window to GPU surface: native handles in `platform`
+
+- **Chosen:** the host turns SDL's window properties into a `platform.Native_Window` (Win32
+  HWND/HINSTANCE, CAMetalLayer, Xlib, Wayland); `render.init` creates the wgpu surface from it.
+- **Rejected:** Odin's `wgpu/sdl3glue`, which would put SDL calls in the renderer (or wgpu calls
+  in the host).
+- **Why:** keeps both boundary rules (SDL only in `host/`, wgpu only in `render/`). A web host
+  would add a canvas variant.
+
+## Mesh drawing: sorted draw list + instancing from a storage buffer
+
+- **Chosen:**
+  - the frame's draws are sorted by a 64-bit key (mesh slot in the high bits);
+  - per-draw data (world matrix, normal matrix, color) is written to one storage buffer;
+  - each run of draws with the same mesh is one `DrawIndexed` with `instanceCount` = run
+    length and `firstInstance` = run start; the vertex shader indexes the storage buffer with
+    `instance_index`.
+- **Alternatives:** a uniform buffer with dynamic offsets per draw (one draw call per object).
+- **Why:** one upload per frame and one draw call per unique mesh. The sort key grows later
+  (pass, material, depth) without changing the loop.
+- **Mesh vertex data is struct-of-arrays on the GPU too:** positions and normals are separate
+  vertex buffers.

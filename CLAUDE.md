@@ -8,19 +8,55 @@ immediate-mode design, so code must be easy to read and every non-obvious decisi
 Read `docs/STYLE.md` for the full rules and reasoning, `docs/DESIGN.md` for past decisions, and
 `docs/REFERENCES.md` for sources.
 
-## Build and run
+## Build and run (Windows)
 
-*Not created yet; the project skeleton is the next milestone. Update this section when it lands.*
+```
+build.bat          full build: build\engine.exe + build\game.dll, copies SDL3.dll and wgpu_native.dll
+build.bat game     rebuild only game.dll; a running engine hot-reloads it (shaders included)
+build.bat test     run the core tests
+build.bat run      full build, then start the engine
+```
 
-- Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (on PATH). Uses the MSVC linker from
-  Visual Studio.
-- Planned: `build.bat` builds the host exe and game DLL; `build.bat game` rebuilds only the DLL
-  for hot reload; `odin test src/core` runs the core tests.
+- Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't
+  on PATH). Uses the MSVC linker from Visual Studio.
+- From the Bash tool, run `cmd //c "D:\\Renderer\\build.bat game"`. A relative `build.bat`
+  isn't found from there.
+- **Verify a change in the running engine:** start `build\engine.exe` with stdout and stderr
+  redirected to files, rebuild, then read the logs. wgpu validation and shader errors go to
+  stderr. F6 forces a full game restart.
+- macOS and Linux build scripts don't exist yet.
+
+## Conventions
+
+- **Coordinates: right-handed, X horizontal (right), Y vertical (up), Z depth (+Z toward the
+  viewer, camera forward = -Z).** Use `core.WORLD_RIGHT`, `core.WORLD_UP`, `core.WORLD_FORWARD`;
+  don't hard-code axes. Axis colors: X red, Y green, Z blue.
+- **Reverse-Z depth:** the near plane is depth 1, clear depth to 0, compare `.Greater`.
+- **Editor UX follows Unity's scene view:**
+  - navigation: Alt+left orbit, middle pan, Alt+right or wheel zoom, right-drag fly with
+    WASD/QE, F to frame;
+  - transform gizmos (move, rotate, scale handles) and the QWERTY tool keys when the editor
+    gets them;
+  - all of it in our right-handed, Y-up space.
+
+## Package layout
+
+```
+src/platform/  plain shared types (Input, Native_Window); no procedures, importable by all
+src/host/      executable: SDL3 window, input, main loop, hot reload; only package using SDL
+src/game/      editor + game, hot-reloaded DLL; all persistent state in Game_Memory
+src/render/    renderer; only package using wgpu (render.odin API, device.odin, pipelines.odin, shaders/)
+src/core/      math and mesh; imports no engine package, no GPU or OS code; tests in core_test.odin
+```
+
+The host passes OS window handles (`platform.Native_Window`) to the game, and `render/` builds
+the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of the host.
 
 ## Hard rules
 
 1. **No wgpu types or calls outside `src/render/`. No SDL calls outside `src/host/`.**
 2. **`src/core/` imports no engine package**, no GPU or OS code. It must stay testable alone.
+   `src/platform/` holds only plain data types and may be imported by any package.
 3. **Plain structs and procedures.** No proc fields used as virtual methods, no inheritance
    emulation, no "manager" objects that own behavior.
 4. **Handles (`index` + `generation`) between systems, not pointers.** Never keep a pointer into
@@ -40,6 +76,9 @@ Read `docs/STYLE.md` for the full rules and reasoning, `docs/DESIGN.md` for past
    - changing `Game_Memory`'s layout needs a full restart.
 9. **Naming:** `Ada_Case` types and enum members, `snake_case` procedures and variables,
    `SCREAMING_SNAKE_CASE` constants, `verb_noun` procedures, no package-name prefixes.
+   **Explicit full-word names, never short symbols:** `renderer` not `r`, `face_index` not `f`,
+   `delta_seconds` not `dt`, including loop variables, callback parameters and WGSL. Only vector
+   components (`.x`, `.rgb`) and domain words (`uv`, `gpu`) are exempt.
 10. **Long, linear procedures are fine.** Extract helpers only when code repeats.
 11. **Assertions (moderate):**
     - assert preconditions and invariants in `core/` and `render/`;
@@ -85,6 +124,12 @@ Read `docs/STYLE.md` for the full rules and reasoning, `docs/DESIGN.md` for past
   Check `vendor/wgpu/wgpu.odin` and https://github.com/odin-lang/examples/tree/master/wgpu
   rather than older wgpu tutorials.
 - **`sdl.Init` returns a bool that must be used:** `if !sdl.Init({.VIDEO}) do ...`.
+- **Don't set an environment variable named `ODIN_ROOT` in scripts.** Odin reads it and
+  fails with "Invalid ODIN_ROOT".
+- **Batch files must have CRLF line endings,** or `goto` labels can break (`.gitattributes`
+  enforces this).
+- **Untyped float constants default to `f64`** when assigned with `:=`. Declare `f32`
+  explicitly when the value is mixed with `[3]f32` math.
 - **Appending to `#soa[dynamic]T` needs a typed literal:** `append(&ps, Particle{...})`.
 - **Odin only ships Windows binaries** for SDL3 and wgpu. macOS and Linux need SDL3 from the
   system package manager and wgpu-native v29.0.1.1 from GitHub.

@@ -28,6 +28,14 @@ These follow the Odin core library.
 | Constants | `SCREAMING_SNAKE_CASE` | `MAX_DRAWS`, `GRID_SIZE` |
 | Packages | short lowercase | `core`, `render`, `ui` |
 
+- **Explicit names, no short symbols.** Every variable, parameter, field and procedure name is
+  written out in full words:
+  - `renderer` not `r`, `camera` not `cam`, `position` not `pos`, `direction` not `dir`,
+    `normal` not `n`, `delta_seconds` not `dt`, `properties` not `props`;
+  - this includes loop variables (`for face_index in 0 ..< face_count(mesh)`, not `for f`),
+    callback parameters, `switch` bindings and test parameters (`test: ^testing.T`);
+  - the exceptions are vector components (`.x`, `.rgb`), established domain terms used as
+    words (`uv`, `gpu`, `rgb`, `sdl`), and package names chosen by their authors (`linalg`).
 - **Procedures are `verb_noun`:** `create_mesh`, `submit_frame`, `extrude_faces`.
 - **Don't repeat the package name:** `render.create_mesh`, not `render.render_create_mesh`.
 - **Put units in names when ambiguous:** `dt_seconds`, `width_px`, `angle_rad`.
@@ -115,15 +123,17 @@ Allocation is grouped by lifetime, not done one object at a time. (Fleury, ginge
 ## 8. Packages and dependencies
 
 ```
-src/host/    executable: SDL3 window, input, main loop, hot reload; the only package that touches SDL
-src/game/    editor + game; hot-reloaded DLL
-src/core/    math, mesh, geometry operations; imports no engine package, no GPU, no OS
-src/render/  renderer; the only package that touches wgpu
-src/ui/      immediate-mode UI
+src/platform/  plain data shared by host and game (Input, Native_Window)
+src/host/      executable: SDL3 window, input, main loop, hot reload; the only package that touches SDL
+src/game/      editor + game; hot-reloaded DLL
+src/core/      math, mesh, geometry operations; imports no engine package, no GPU, no OS
+src/render/    renderer; the only package that touches wgpu
+src/ui/        immediate-mode UI (not created yet)
 ```
 
-- **Imports flow one way:** `game → ui, render, core`; `render → core`; `core →` nothing in
-  the engine. `host` doesn't import `game`; it loads it as a DLL.
+- **Imports flow one way:** `game → ui, render, core, platform`; `render → core, platform`;
+  `host → platform`; `core →` nothing in the engine. `host` doesn't import `game`; it loads
+  it as a DLL.
 - **No wgpu types outside `render/`. No SDL calls outside `host/`.** These boundaries are what
   let us swap backends (SDL_GPU, raw Vulkan or Metal, a web host) later.
 - **Ask before adding dependencies,** including other `vendor:` packages.
