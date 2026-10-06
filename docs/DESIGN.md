@@ -246,6 +246,40 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
 - **Planned:** a fixed simulation step with interpolated rendering (*Fix Your Timestep*) in the
   engine phase; possibly an uncapped present mode (Mailbox or Immediate) toggle for profiling.
 
+## Input latency: frame pacing, one queued frame, D3D12 on Windows
+
+- **Problem (feedback):** dragging with the gizmo, the object trailed the mouse cursor. The
+  cursor is drawn by Windows with no delay, so any latency in our frames shows as a gap.
+- **Measured** (60 Hz, Vulkan): each frame spent ~15 of its 16.7 ms blocked in
+  `SurfaceGetCurrentTexture`. That wait comes after the frame has read input, so input was a
+  whole refresh old before drawing started. wgpu also queues up to two presented frames. Total:
+  roughly three refreshes (~50 ms) from mouse to screen.
+- **Fix 1, pace the frame (`core/frame_pacing.odin`):** after presenting, sleep off most of
+  the wait, *then* read input; the acquire only waits a small margin. The sleep is steered by
+  feedback: every 30 frames, move it halfway toward leaving 2 ms for the shortest acquire wait
+  seen; a frame that barely waits (< 0.3 ms, maybe a missed refresh) shortens it by 2 ms at
+  once. The same idea as NVIDIA Reflex's or Unreal's frame delay. The host does the sleeping
+  with `SDL_DelayPrecise` (high-resolution timers; Windows' plain `Sleep` can overshoot by
+  15 ms and drop a frame); the game exports `game_frame_delay_milliseconds` for it.
+- **Fix 2, one queued frame** (`desiredMaximumFrameLatency = 1`, wgpu's default is 2), saving a
+  refresh.
+- **Fix 3, D3D12 on Windows.** On the development laptop (hybrid graphics: the RTX 4070 renders,
+  the AMD 780M drives the 60 Hz panel) Vulkan with one queued frame stopped waiting for vsync
+  entirely: 354 fps on a 60 Hz display. With two queued it paced correctly. D3D12 paces
+  correctly with one, and rendered identically. So the renderer asks for D3D12 first on Windows
+  (any other backend if it's missing), and Vulkan keeps two queued frames.
+- **Result** (same laptop, after settling): 60 fps; the frame sleeps ~10.5 ms and then waits ~4 ms
+  for the display (the controller keeps the margin against the *worst* frame, so the typical
+  wait is above 2 ms). Estimated mouse-to-screen latency about one refresh plus ~4 ms (~21 ms)
+  instead of ~3 refreshes; this is an estimate from the timings, not a measurement with a camera.
+- **Settings:** Rendering → "Low latency" (with VSync) turns the pacing off for comparison.
+  Statistics show `sleep` and `wait`.
+- **Tests (`core/frame_pacing_test.odin`):** with a simple vsync model, the delay settles with
+  the margin left; it backs off at once when a frame gets slower, then resettles; it never goes
+  negative.
+- **Not done:** reading input even later (late-latching the camera/gizmo transform on the GPU),
+  and measuring real latency (a high-speed camera or an LDAT-style sensor).
+
 ## Render resolution: fixed or dynamic, 50–200%, FSR 1 below native, supersampling above
 
 - **Chosen:**

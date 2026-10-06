@@ -164,6 +164,10 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
 
 ## Known problems (Odin dev-2026-09, wgpu-native v29)
 
+- **Vulkan with `desiredMaximumFrameLatency = 1` ignores vsync on this hybrid-GPU laptop**
+  (354 fps on a 60 Hz panel). The renderer prefers D3D12 on Windows and gives Vulkan two queued
+  frames; see docs/DESIGN.md, "Input latency".
+
 - **wgpu `CreateInstance(nil)` crashes on this machine** when every backend is enabled. Always
   pass `InstanceExtras{sType = .InstanceExtras, backends = wgpu.InstanceBackendFlags_Primary}`
   (D3D12, Vulkan, Metal).
