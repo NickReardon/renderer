@@ -524,8 +524,23 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   - *Center:* the gizmo sits in the middle of the selection's world bounds (the same box F
     frames, now `selection_world_bounds`); Rotate turns the selection as one rigid group
     around it, and Scale also scales the objects' offsets from it (along the dragged axis, or
-    uniformly), so a group grows like one object.
+    uniformly), so a group grows like one object (exactly for uniform scale, or when the
+    objects share a rotation; see the limitation below).
   - The point is fixed at the press, so the gizmo doesn't chase the bounds while scaling.
+  - **Known limitation: an axis Scale drag on objects with different rotations** (found by an
+    outside review). The handles show the active object's axes, and the offsets from the centre
+    scale along that axis, but each object's scale changes along *its own* axis of the same
+    name. Example: the active cube is turned 90° about Y and a second cube isn't. Dragging the X
+    handle to 2× doubles the active cube's world Z size, but the second cube's world X size,
+    while moving the second cube along world Z. So the group doesn't stretch as one piece.
+    - *Why not fix it:* stretching a rotated object along some other axis turns it into a skewed
+      shape, and an entity's transform (position, rotation, scale) can't store skew. The only
+      exact fixes are storing full matrices or baking the skew into the mesh, and both are too
+      much for an editor convenience.
+    - *Why not approximate it:* the alternatives are scaling only the spacing, or switching to
+      uniform scale for mixed rotations. Both surprise more than the current behaviour.
+    - Unity does the same: each object's local scale changes along its own axis. Uniform scale
+      (the centre handle), and axis drags on objects that share a rotation, are exact.
   - Default is Pivot.
 - **Global / Local (X)** got Unity's key too. Local now takes the *active* object's axes rather
   than the first selected in pool order.

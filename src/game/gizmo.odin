@@ -12,7 +12,9 @@
 //                   Center: the middle of the selection's bounds, and the selection turns and
 //                   scales as one group around it.
 //   Global / Local  Move and Rotate use world axes or the active object's own axes. Scale always
-//                   uses local axes.
+//                   uses local axes: the handles show the active object's, and every object
+//                   scales along its own axis of the same name (so a Center axis drag on objects
+//                   rotated differently doesn't stretch them as one piece; see apply_gizmo_drag).
 // The active object is the one selected last (see active_selected_entity).
 //
 // How it works:
@@ -481,8 +483,12 @@ apply_gizmo_drag :: proc(memory: ^Game_Memory, frame: Gizmo_Frame, input: ^platf
 				} else {
 					entity.scale[axis] = dragged.scale[axis] * factor
 				}
-				// Center: the group's spacing scales too (along the dragged axis, or uniformly),
-				// so it grows as one object would. Pivot: each scales in place.
+				// Center: the group's spacing scales too (along the dragged axis, or uniformly).
+				// Pivot: each scales in place. Each object scales along its *own* axis number
+				// `axis`, while the spacing follows the active object's axis. So an axis drag on
+				// objects rotated differently from the active one doesn't stretch the group as one
+				// piece: a rotated object stretched along another object's axis would be skewed,
+				// and position, rotation and scale can't store skew. Unity does the same.
 				if group_around_center {
 					offset := dragged.position - gizmo.drag_origin
 					if gizmo.active == .Center {
