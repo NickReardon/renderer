@@ -27,6 +27,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --mirror=Cube           scale X = -1 on the named object (mirrored-transform check)
   --flatten=Sphere        scale Y = 0 on the named object (zero-scale check)
   --tool=rotate           start with a tool (hand, move, rotate, scale); --local for Local axes
+  --center                start in Center mode (gizmo at the selection's middle) instead of Pivot
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't

@@ -444,7 +444,8 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
     and an empty selection;
   - UI: toolbar button clicks, and the toolbar taking the mouse.
 - **Not yet:** plane handles (move on two axes at once), a screen-space rotation
-  ring, Pivot/Center toggle, and scaling several objects' positions about their centre.
+  ring, Pivot/Center toggle, and scaling several objects' positions about their centre. (All
+  added in step 4.)
 
 ## Modeler, step 3: undo and redo
 
@@ -499,3 +500,70 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   Ctrl+D undo reselecting the originals; a new edit ending the redo branch; dropping the
   oldest steps when full; a multi-frame gizmo drag committed as in `game_update` making one
   step.
+
+## Modeler, step 4: plane handles, view ring, Pivot/Center
+
+- **Plane handles (Move):** a square per pair of axes, coloured by the axis it faces (Unity's
+  convention), spanning 0.12–0.38 of the handle length on both axes. Like Unity's, each square
+  flips to the side of its axes that faces the camera, so it's never hidden behind the gizmo.
+  A square seen within ~78° of edge-on (facing cosine below 0.2) is hidden: it would be a
+  sliver, and the ray/plane hit would swing wildly with small mouse moves. Hit test: inside the
+  projected quad, which wins over the axis lines bordering it. Drag: the mouse ray against the
+  plane (`core.ray_plane_intersection`, new and tested), measured from where it hit at the
+  press along the plane's two axes; Ctrl snaps each axis on its own. Drawn as two translucent
+  triangles plus an outline; the shared diagonal shows no visible seam.
+- **View ring (Rotate):** an outer circle at 1.15× the handle length, drawn with the overlay's
+  rounded-rect border (a circle is a rounded rect with a radius of half its size), and grabbed
+  within 9 points of its radius. It turns around the direction from the gizmo to the camera,
+  captured at the press, using the same screen-angle measurement as the axis rings (with the
+  axis always facing the viewer, the sign needs no flip). Unity's free rotation (dragging
+  inside the sphere, like a trackball) isn't done yet.
+- **Pivot / Center (Z), Unity's "tool handle position":**
+  - *Pivot:* the gizmo sits on the active object's origin; Rotate and Scale act on each object
+    around its own origin (positions don't change).
+  - *Center:* the gizmo sits in the middle of the selection's world bounds (the same box F
+    frames, now `selection_world_bounds`); Rotate turns the selection as one rigid group
+    around it, and Scale also scales the objects' offsets from it (along the dragged axis, or
+    uniformly), so a group grows like one object (exactly for uniform scale, or when the
+    objects share a rotation; see the limitation below).
+  - The point is fixed at the press, so the gizmo doesn't chase the bounds while scaling.
+  - **Known limitation: an axis Scale drag on objects with different rotations** (found by an
+    outside review). The handles show the active object's axes, and the offsets from the centre
+    scale along that axis, but each object's scale changes along *its own* axis of the same
+    name. Example: the active cube is turned 90° about Y and a second cube isn't. Dragging the X
+    handle to 2× doubles the active cube's world Z size, but the second cube's world X size,
+    while moving the second cube along world Z. So the group doesn't stretch as one piece.
+    - *Why not fix it:* stretching a rotated object along some other axis turns it into a skewed
+      shape, and an entity's transform (position, rotation, scale) can't store skew. The only
+      exact fixes are storing full matrices or baking the skew into the mesh, and both are too
+      much for an editor convenience.
+    - *Why not approximate it:* the alternatives are scaling only the spacing, or switching to
+      uniform scale for mixed rotations. Both surprise more than the current behaviour.
+    - Unity does the same: each object's local scale changes along its own axis. Uniform scale
+      (the centre handle), and axis drags on objects that share a rotation, are exact.
+  - Default is Pivot.
+- **Global / Local (X)** got Unity's key too. Local now takes the *active* object's axes rather
+  than the first selected in pool order.
+- **The gizmo follows the drag** (feedback: it jumped to the new place on release). The drawn
+  gizmo now travels with a move, turns with a Local rotation, and stretches the dragged Scale
+  handle by the scale factor (Unity's look). It snaps back to normal length on release. The
+  centre of a rotation or scale stays where it was pressed, because it's the drag's fixed point.
+  Only the drawing changed: the drag is still solved from the origin and axes saved at the
+  press (`drag_origin`, `drag_axes`), with `drag_offset` and `drag_handle_stretch` recorded
+  just for display, so nothing feeds back into the maths and nothing drifts.
+- **Active object:** the one selected last (a click, a Hierarchy click, or Create), as in
+  Unity. Stored as a handle in `Editor_State`, and checked on use: if it's no longer selected
+  (Ctrl+click, Delete, undo, Ctrl+D), the first selected object stands in. That way nothing has
+  to keep it up to date, the same reasoning as selection being a flag. It isn't part of undo,
+  so after an undo the active object may differ from Unity's choice. The fallback keeps the
+  gizmo correct anyway.
+- **Bug caught by the tests:** `ray_plane_intersection` returns a distance, and assigning that
+  `f32` to a `[3]f32` compiles in Odin (a scalar fills every component), so the first version
+  moved the cube diagonally. The gizmo now goes through `mouse_on_plane`, which returns the
+  point.
+- **Tests:** core: ray/plane hits from either side, parallel and behind misses. game: a plane
+  drag moves exactly the projected amount with nothing along the normal; looking straight
+  down, the facing square is grabbable and edge-on ones aren't; the view ring gives exactly
+  90° about the view axis, and turns screen-right to screen-up; Pivot vs Center placement,
+  fallback when the active object is deselected, rotation in place vs orbiting, and scale
+  keeping vs spreading positions.
