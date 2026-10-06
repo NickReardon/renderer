@@ -51,10 +51,26 @@ Ui_State :: struct {
 	drag_start_value:    f32,
 	drag_moved:          bool,
 
+	// Tab between number boxes. Boxes register themselves as they are drawn, so the order is the
+	// drawing order and nothing has to be declared up front.
+	focus_request:       Focus_Request,
+	first_box_id:        u32, // first number box drawn this frame, and its value
+	first_box_value:     f32,
+	previous_box_id:     u32, // last number box drawn so far this frame, and its value
+	previous_box_value:  f32,
+	scroll_to_edit:      bool, // typing just moved to a box: scroll its panel to show it
+
 	// Panels declared last frame, to tell whether the mouse is over the UI or the 3D viewport.
 	panel_ids:           [MAX_PANELS]u32,
 	panel_count:         int,
 	mouse_over_panel:    bool,
+}
+
+// Where Tab sends the typing once the box that had it is done.
+Focus_Request :: enum u8 {
+	None,
+	Next, // the next number box drawn this frame (Tab)
+	Last, // the last number box drawn this frame (Shift+Tab from the first box)
 }
 
 init :: proc(state: ^Ui_State, window_size: [2]i32) -> bool {
@@ -91,6 +107,8 @@ begin_frame :: proc(state: ^Ui_State, input: ^platform.Input) {
 	state.scale = input.display_scale if input.display_scale > 0 else 1
 	state.editing_at_frame_start = state.edit_id != 0
 	state.typed_value_applied = false
+	state.first_box_id, state.first_box_value = 0, 0
+	state.previous_box_id, state.previous_box_value = 0, 0
 
 	// A widget only stays active while the mouse is held; this also frees the mouse if the
 	// active widget stopped being drawn.
@@ -108,6 +126,13 @@ begin_frame :: proc(state: ^Ui_State, input: ^platform.Input) {
 			state.mouse_over_panel = true
 			break
 		}
+	}
+	// Tab can move the typing to a box scrolled out of its panel. Scroll it back into view,
+	// using the box's position from last frame's layout, so it shows one frame after the move.
+	// This runs before UpdateScrollContainers, which clamps the result to the contents.
+	if state.scroll_to_edit {
+		state.scroll_to_edit = false
+		scroll_box_into_view(state, state.edit_id)
 	}
 	state.panel_count = 0
 
@@ -231,6 +256,19 @@ interact :: proc(state: ^Ui_State, id: clay.ElementId) -> (result: Interaction) 
 // run frames without a renderer.
 @(private)
 finish_layout :: proc(state: ^Ui_State) -> clay.ClayArray(clay.RenderCommand) {
+	// Tab from the last box, or Shift+Tab from the first: no box came after, so wrap around.
+	switch state.focus_request {
+	case .Next:
+		if state.first_box_id != 0 {
+			start_editing(state, state.first_box_id, state.first_box_value)
+		}
+	case .Last:
+		if state.previous_box_id != 0 {
+			start_editing(state, state.previous_box_id, state.previous_box_value)
+		}
+	case .None:
+	}
+	state.focus_request = .None
 	return clay.EndLayout(state.input.delta_seconds)
 }
 

@@ -3,7 +3,9 @@
 package game
 
 import "core:math"
+import "core:math/linalg"
 import "core:testing"
+import "engine:core"
 import "engine:platform"
 
 // A scene with one selected cube at the origin, the default camera, and a 1000 x 800 view.
@@ -57,6 +59,8 @@ test_gizmo_move :: proc(test: ^testing.T) {
 	update_gizmo(memory, &drag, true)
 	entity := &memory.scene.entities[1]
 	testing.expectf(test, abs(entity.position.x - frame.world_length) < 1e-3 && abs(entity.position.y) < 1e-5 && abs(entity.position.z) < 1e-5, "moved along X only by one length, got %v", entity.position)
+	// The gizmo travels with the cube during the drag, not only after the release.
+	testing.expectf(test, linalg.length(compute_gizmo_frame(memory).origin - entity.position) < 1e-6, "the gizmo should follow the drag, at %v", compute_gizmo_frame(memory).origin)
 
 	// Back to the press point: back to the start (computed from the press, so no drift).
 	back := mouse_input(pixel_of(memory, frame, 0, 0.5), false, true)
@@ -92,6 +96,14 @@ test_gizmo_rotate :: proc(test: ^testing.T) {
 	update_gizmo(memory, &drag, true)
 	rotation := memory.scene.entities[1].rotation
 	testing.expectf(test, rotation.y > 30 && rotation.y < 150 && abs(rotation.x) < 1e-3 && abs(rotation.z) < 1e-3, "should rotate about Y only, positively, got %v", rotation)
+
+	// During the drag the centre stays put (it's the pivot); in Local mode the axes turn with
+	// the cube, so the gizmo's X axis is the cube's X axis.
+	memory.gizmo.local_orientation = true
+	dragging := compute_gizmo_frame(memory)
+	cube_x := (core.euler_rotation_matrix(rotation) * [4]f32{1, 0, 0, 0}).xyz
+	testing.expect(test, dragging.origin == frame.origin, "the rotation's centre doesn't move")
+	testing.expectf(test, linalg.length(dragging.axes[0] - cube_x) < 1e-5, "Local axes should turn with the cube: %v vs %v", dragging.axes[0], cube_x)
 }
 
 @(test)
@@ -108,11 +120,15 @@ test_gizmo_scale :: proc(test: ^testing.T) {
 	update_gizmo(memory, &drag, true)
 	scale := memory.scene.entities[1].scale
 	testing.expectf(test, abs(scale.x - 2) < 1e-3 && scale.y == 1 && scale.z == 1, "X scale should double, got %v", scale)
+	// The dragged handle stretches with it, as in Unity; the others keep their length.
+	stretch := compute_gizmo_frame(memory).handle_stretch
+	testing.expectf(test, abs(stretch.x - 2) < 1e-3 && stretch.y == 1 && stretch.z == 1, "the X handle should be drawn twice as long, got %v", stretch)
 
 	// Release ends the drag; the centre handle then scales uniformly (right = bigger).
 	release := mouse_input(pixel_of(memory, frame, 0, 1), false, false)
 	update_gizmo(memory, &release, true)
 	testing.expect_value(test, memory.gizmo.active, Gizmo_Part.None)
+	testing.expect_value(test, compute_gizmo_frame(memory).handle_stretch, [3]f32{1, 1, 1})
 	center_press := mouse_input(frame.origin_pixel, true, true)
 	update_gizmo(memory, &center_press, true)
 	testing.expect_value(test, memory.gizmo.active, Gizmo_Part.Center)
@@ -131,4 +147,150 @@ test_gizmo_hidden_for_hand_tool_and_empty_selection :: proc(test: ^testing.T) {
 	memory.scene.entities[1].flags -= {.Selected}
 	testing.expect(test, !compute_gizmo_frame(memory).visible, "no selection, no gizmo")
 
+}
+
+@(test)
+test_gizmo_move_in_plane :: proc(test: ^testing.T) {
+	memory := make_gizmo_test_memory(.Move)
+	defer free(memory)
+	frame := compute_gizmo_frame(memory)
+
+	// Press in the middle of the XY square (it faces Z), drag one handle length along its first
+	// edge and half along its second: the cube moves exactly that much, and not at all along Z.
+	corners := plane_handle_world_corners(frame, 2)
+	center := (corners[0] + corners[1] + corners[2] + corners[3]) * 0.25
+	first_direction := linalg.normalize(corners[1] - corners[0])
+	second_direction := linalg.normalize(corners[3] - corners[0])
+	center_pixel, _ := project_to_pixel(frame.view_projection, frame.viewport_min, frame.viewport_max, center)
+	press := mouse_input(center_pixel, true, true)
+	update_gizmo(memory, &press, true)
+	testing.expect_value(test, memory.gizmo.active, Gizmo_Part.Plane_XY)
+
+	expected := first_direction * frame.world_length + second_direction * frame.world_length * 0.5
+	target_pixel, _ := project_to_pixel(frame.view_projection, frame.viewport_min, frame.viewport_max, center + expected)
+	drag := mouse_input(target_pixel, false, true)
+	update_gizmo(memory, &drag, true)
+	position := memory.scene.entities[1].position
+	testing.expectf(test, linalg.length(position - expected) < 1e-3 && abs(position.z) < 1e-5, "should move %v within the XY plane, got %v", expected, position)
+
+	release := mouse_input(target_pixel, false, false)
+	update_gizmo(memory, &release, true)
+
+	// Looking straight down: the ZX square faces the camera and can be grabbed; the XY and YZ
+	// squares are edge-on slivers, so they're hidden and their spot belongs to nothing.
+	memory.camera.pitch = math.to_radians(f32(89.9))
+	memory.camera.yaw = 0
+	frame = compute_gizmo_frame(memory)
+	corners = plane_handle_world_corners(frame, 1)
+	center = (corners[0] + corners[2]) * 0.5
+	center_pixel, _ = project_to_pixel(frame.view_projection, frame.viewport_min, frame.viewport_max, center)
+	hover := mouse_input(center_pixel, false, false)
+	update_gizmo(memory, &hover, true)
+	testing.expect_value(test, memory.gizmo.hovered, Gizmo_Part.Plane_ZX)
+	corners = plane_handle_world_corners(frame, 2)
+	center = (corners[0] + corners[2]) * 0.5
+	center_pixel, _ = project_to_pixel(frame.view_projection, frame.viewport_min, frame.viewport_max, center)
+	hover = mouse_input(center_pixel, false, false)
+	update_gizmo(memory, &hover, true)
+	testing.expect(test, memory.gizmo.hovered != .Plane_XY, "an edge-on square can't be grabbed")
+}
+
+@(test)
+test_gizmo_view_ring :: proc(test: ^testing.T) {
+	memory := make_gizmo_test_memory(.Rotate)
+	defer free(memory)
+	frame := compute_gizmo_frame(memory)
+	radius := view_ring_radius(frame)
+
+	// From the ring's right edge to its top: a quarter turn counter-clockwise on screen, which is
+	// +90° about the axis pointing at the viewer.
+	press := mouse_input(frame.origin_pixel + {radius, 0}, true, true)
+	update_gizmo(memory, &press, true)
+	testing.expect_value(test, memory.gizmo.active, Gizmo_Part.View)
+	drag := mouse_input(frame.origin_pixel + {0, -radius}, false, true)
+	update_gizmo(memory, &drag, true)
+
+	rotation := core.euler_rotation_matrix(memory.scene.entities[1].rotation)
+	expected := linalg.matrix4_rotate_f32(math.PI / 2, frame.toward_viewer)
+	for column in 0 ..< 3 {
+		for row in 0 ..< 3 {
+			testing.expectf(test, abs(rotation[row, column] - expected[row, column]) < 1e-3, "rotation should be 90° about the view axis; [%d,%d] is %v, expected %v", row, column, rotation[row, column], expected[row, column])
+		}
+	}
+	// And on screen: a point to the right of the centre turns to above it.
+	right := linalg.normalize(linalg.cross(core.WORLD_UP, frame.toward_viewer)) * frame.world_length
+	turned := (rotation * [4]f32{right.x, right.y, right.z, 0}).xyz
+	turned_pixel, _ := project_to_pixel(frame.view_projection, frame.viewport_min, frame.viewport_max, frame.origin + turned)
+	testing.expectf(test, turned_pixel.y < frame.origin_pixel.y - radius * 0.5 && abs(turned_pixel.x - frame.origin_pixel.x) < radius * 0.1, "right should turn to up on screen, got %v from %v", turned_pixel, frame.origin_pixel)
+}
+
+// Two selected cubes at x = -2 and x = 2; the second is the active object.
+@(private = "file")
+make_two_cube_memory :: proc(tool: Transform_Tool, handle_position: Handle_Position) -> ^Game_Memory {
+	memory := make_gizmo_test_memory(tool)
+	memory.gizmo.handle_position = handle_position
+	memory.scene.entities[1].position = {-2, 0, 0}
+	second_handle, second := create_entity(&memory.scene, "Second")
+	second.position = {2, 0, 0}
+	second.flags += {.Selected}
+	memory.editor.active_entity = second_handle
+	return memory
+}
+
+@(test)
+test_gizmo_pivot_and_center :: proc(test: ^testing.T) {
+	// Where the gizmo sits: the active object's origin, or the middle of the selection's bounds.
+	{
+		memory := make_two_cube_memory(.Move, .Pivot)
+		defer free(memory)
+		testing.expect_value(test, compute_gizmo_frame(memory).origin, [3]f32{2, 0, 0})
+		// The active object deselected: the gizmo falls back to the first selected one.
+		memory.scene.entities[2].flags -= {.Selected}
+		testing.expect_value(test, compute_gizmo_frame(memory).origin, [3]f32{-2, 0, 0})
+		memory.gizmo.handle_position = .Center
+		memory.scene.entities[2].flags += {.Selected}
+		testing.expect_value(test, compute_gizmo_frame(memory).origin, [3]f32{0, 0, 0})
+	}
+
+	// Rotate, Pivot: each cube turns in place.
+	{
+		memory := make_two_cube_memory(.Rotate, .Pivot)
+		defer free(memory)
+		frame := compute_gizmo_frame(memory)
+		press := mouse_input(ring_point_pixel(memory, frame, 1, 45), true, true)
+		update_gizmo(memory, &press, true)
+		drag := mouse_input(ring_point_pixel(memory, frame, 1, 135), false, true)
+		update_gizmo(memory, &drag, true)
+		first, second := memory.scene.entities[1], memory.scene.entities[2]
+		testing.expectf(test, first.rotation.y > 30 && second.rotation.y > 30, "both should turn, got %v and %v", first.rotation, second.rotation)
+		testing.expectf(test, first.position == {-2, 0, 0} && second.position == {2, 0, 0}, "Pivot keeps positions, got %v and %v", first.position, second.position)
+	}
+
+	// Rotate, Center: the pair also orbits the shared centre, staying 2 from it.
+	{
+		memory := make_two_cube_memory(.Rotate, .Center)
+		defer free(memory)
+		frame := compute_gizmo_frame(memory)
+		press := mouse_input(ring_point_pixel(memory, frame, 1, 45), true, true)
+		update_gizmo(memory, &press, true)
+		drag := mouse_input(ring_point_pixel(memory, frame, 1, 135), false, true)
+		update_gizmo(memory, &drag, true)
+		first, second := memory.scene.entities[1], memory.scene.entities[2]
+		testing.expectf(test, first.position != {-2, 0, 0} && abs(linalg.length(first.position) - 2) < 1e-4 && abs(first.position.y) < 1e-5, "Center orbits the centre, got %v", first.position)
+		testing.expectf(test, linalg.length(first.position + second.position) < 1e-4, "the pair stays symmetric about the centre, got %v and %v", first.position, second.position)
+	}
+
+	// Scale X to double, Center: the spacing doubles too; Pivot: positions stay.
+	for handle_position in Handle_Position {
+		memory := make_two_cube_memory(.Scale, handle_position)
+		defer free(memory)
+		frame := compute_gizmo_frame(memory)
+		press := mouse_input(pixel_of(memory, frame, 0, 0.5), true, true)
+		update_gizmo(memory, &press, true)
+		drag := mouse_input(pixel_of(memory, frame, 0, 1), false, true)
+		update_gizmo(memory, &drag, true)
+		first := memory.scene.entities[1]
+		expected_x: f32 = -4 if handle_position == .Center else -2
+		testing.expectf(test, abs(first.scale.x - 2) < 1e-3 && abs(first.position.x - expected_x) < 1e-3, "%v: scale x 2 and position x %v, got %v and %v", handle_position, expected_x, first.scale, first.position)
+	}
 }

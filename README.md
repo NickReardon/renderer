@@ -28,6 +28,10 @@ build.bat test     run the core and UI tests
 | F | Frame the selection |
 | Esc | Clear the selection (during a gizmo drag: cancel it) |
 | Q / W / E / R | Hand (pan), Move, Rotate, Scale tools; drag a handle to transform, Ctrl to snap |
+| Move tool squares | Drag in the plane of two axes |
+| Rotate tool outer ring | Turn around the view direction |
+| Z / X | Pivot or Center (where the gizmo sits and what it turns around) / Global or Local axes |
+| Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) | Undo / redo |
 
 The Hierarchy panel on the left creates objects (cube, sphere, cylinder, plane) and lists the scene; the Inspector on the right edits the selected object, generated from its fields, plus view, camera and rendering settings. Number fields: drag sideways to change, click to type (Enter applies, Escape cancels).
 

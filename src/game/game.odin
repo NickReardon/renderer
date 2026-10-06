@@ -122,6 +122,8 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 			game_memory.gizmo.tool = .Scale
 		case "--local":
 			game_memory.gizmo.local_orientation = true
+		case "--center":
+			game_memory.gizmo.handle_position = .Center
 		}
 	}
 	return true
@@ -374,9 +376,14 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 					}
 				}
 			}
-			if ui.toolbar(user_interface, "orientation") {
-				// Scale always works in the object's own axes, so the toggle only matters for
-				// Move and Rotate.
+			if ui.toolbar(user_interface, "handle settings") {
+				// Each button shows the current setting and switches it, as in Unity (Z, X).
+				handle_position_labels := HANDLE_POSITION_LABELS
+				if ui.toggle_button(user_interface, handle_position_labels[memory.gizmo.handle_position], false) {
+					toggle_handle_position(&memory.gizmo)
+				}
+				// Scale always works in the object's own axes, so this only matters for Move and
+				// Rotate.
 				orientation_label := "Local" if memory.gizmo.local_orientation else "Global"
 				if ui.toggle_button(user_interface, orientation_label, false) {
 					memory.gizmo.local_orientation = !memory.gizmo.local_orientation
