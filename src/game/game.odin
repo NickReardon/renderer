@@ -29,6 +29,7 @@ Game_Memory :: struct {
 	scene:                 Scene,
 	editor:                Editor_State,
 	gizmo:                 Gizmo_State,
+	undo_history:          Undo_History,
 	elapsed_seconds:       f64,
 	viewport_min:          [2]f32, // the 3D view's rectangle in the last frame's layout (pixels)
 	viewport_max:          [2]f32,
@@ -106,6 +107,7 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 	create_primitive_entity(scene, .Sphere, {2.2, 0.5, 0}, {0.85, 0.35, 0.2})
 	create_primitive_entity(scene, .Cylinder, {-2.2, 1, 0}, {0.2, 0.55, 0.85})
 	apply_scene_developer_flags(scene, arguments)
+	reset_undo_history(&game_memory.undo_history, scene) // the starting scene isn't an undoable step
 	for argument in arguments {
 		switch argument {
 		case "--tool=hand":
@@ -193,6 +195,11 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	}
 	update_editor(game_memory, input, &viewport_input, viewport_has_mouse, viewport_has_keyboard)
 	update_viewport_camera(&game_memory.camera, &viewport_input)
+	// Record this frame's edits as an undo step, unless one is still in progress: a drag (gizmo
+	// or number field) or typing in a field. Those are recorded once they finish.
+	if !edit_in_progress(game_memory, input) {
+		commit_undo_step(&game_memory.undo_history, &game_memory.scene)
+	}
 
 	game_memory.elapsed_seconds += f64(input.delta_seconds)
 	// Exponential moving average of frame time, seeded with the first frame so it doesn't creep
@@ -443,6 +450,8 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 				}
 			}
 			ui.label(user_interface, fmt.tprintf("objects %d", object_count), .Monospace)
+			undoable, redoable := undo_counts(&memory.undo_history)
+			ui.label(user_interface, fmt.tprintf("undo    %d (redo %d)", undoable, redoable), .Monospace)
 			ui.label(user_interface, fmt.tprintf("window  %d × %d", input.window_size.x, input.window_size.y), .Monospace)
 		}
 	}

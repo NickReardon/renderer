@@ -11,7 +11,8 @@
 // it never fights with dragging.
 //
 // Shortcuts (when the 3D view has the keyboard): Delete, Ctrl+D duplicate, F frame selection,
-// Escape clear selection.
+// Escape clear selection. Ctrl+Z undo and Ctrl+Y / Ctrl+Shift+Z redo work wherever the mouse
+// is, except while typing in a field or in the middle of a drag.
 package game
 
 import "core:fmt"
@@ -47,6 +48,22 @@ update_editor :: proc(memory: ^Game_Memory, raw_input, input: ^platform.Input, v
 	alt_held := input.keys[.Left_Alt].down || input.keys[.Right_Alt].down
 	ctrl_held := input.keys[.Left_Ctrl].down || input.keys[.Right_Ctrl].down
 	shift_held := input.keys[.Left_Shift].down || input.keys[.Right_Shift].down
+
+	// Undo and redo. `input` has no keys while a field is being typed into, and nothing is
+	// undone mid-drag. Any edit made earlier this frame is committed first, so it's what gets
+	// undone.
+	if !edit_in_progress(memory, raw_input) && ctrl_held {
+		undo_pressed := input.keys[.Z].pressed && !shift_held
+		redo_pressed := input.keys[.Y].pressed || (input.keys[.Z].pressed && shift_held)
+		if undo_pressed || redo_pressed {
+			commit_undo_step(&memory.undo_history, scene)
+			if undo_pressed {
+				undo(&memory.undo_history, scene)
+			} else {
+				redo(&memory.undo_history, scene)
+			}
+		}
+	}
 
 	// The gizmo goes first: a press on a handle starts a drag instead of a selection click.
 	gizmo_was_dragging := memory.gizmo.active != .None
@@ -97,6 +114,12 @@ update_editor :: proc(memory: ^Game_Memory, raw_input, input: ^platform.Input, v
 		if input.keys[.E].pressed do memory.gizmo.tool = .Rotate
 		if input.keys[.R].pressed do memory.gizmo.tool = .Scale
 	}
+}
+
+// True while an edit that should become a single undo step is still going on: the left button
+// is held (a gizmo or number-field drag), or a field is being typed into.
+edit_in_progress :: proc(memory: ^Game_Memory, raw_input: ^platform.Input) -> bool {
+	return raw_input.mouse[.Left].down || memory.gizmo.active != .None || ui.wants_keyboard(&memory.user_interface)
 }
 
 // Selection change for a click at a window pixel inside the 3D view.

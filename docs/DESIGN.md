@@ -367,7 +367,7 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
     outward-facing, correct volumes), the vector field, selectable rows and the reflection
     inspector;
   - hot reload with a selection in place.
-- **Not yet:** undo, renaming objects (needs a text field), multi-object editing in the
+- **Not yet:** renaming objects (needs a text field), multi-object editing in the
   Inspector, and an outline silhouette.
 
 ## Review fixes (external review of 2b2380a)
@@ -443,5 +443,54 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
     rotation about Y only; X scale doubling exactly; uniform scale; hidden for the Hand tool
     and an empty selection;
   - UI: toolbar button clicks, and the toolbar taking the mouse.
-- **Not yet:** undo (next), plane handles (move on two axes at once), a screen-space rotation
+- **Not yet:** plane handles (move on two axes at once), a screen-space rotation
   ring, Pivot/Center toggle, and scaling several objects' positions about their centre.
+
+## Modeler, step 3: undo and redo
+
+- **Keys:** Ctrl+Z undo, Ctrl+Y or Ctrl+Shift+Z redo (Unity on Windows). They work wherever the
+  mouse is, but not while a field is being typed into or a drag is under way.
+- **Chosen: diff the entity pool against a committed copy.** `Undo_History.committed` holds the
+  pool as of the last step. Once per frame, when no edit is in progress (left button up, no
+  gizmo drag, no text field active), `commit_undo_step` compares each live entity with its
+  copy, byte for byte. The slots that differ become one step, storing the whole `Entity`
+  before and after. Undo writes the befores back; redo writes the afters.
+- **Alternatives:**
+  - *command pattern* (one do/undo pair per operation): every edit path needs its own inverse,
+    and the generated Inspector would need an undo hook per field type;
+  - *explicit "record before change"* (Unity's `Undo.RecordObject`): no inverse code, but every
+    edit site must remember to call it, and a forgotten call is a silent bug;
+  - *whole-scene snapshots*: simplest, but about 0.5 MB per step for 4096 entities;
+  - *versioned objects* (Our Machinery's The Truth): the most general, but it needs every edit
+    to go through a property API.
+- **Why:**
+  - nothing that edits entities knows undo exists. The Inspector, the gizmo, Create, Delete and
+    Ctrl+D needed no changes, and a new `inspect` field is undoable for free;
+  - a step costs only the entities it touched, about 230 bytes each;
+  - the comparison (at most 4096 × 116 bytes) costs microseconds a frame and allocates nothing.
+  This works because the editor's data is a flat pool of plain structs (the fat-struct model
+  promised this in `docs/ENTITIES.md`).
+- **One step per gesture.** Nothing is committed while the left button is held or a field has
+  the keyboard, so a whole gizmo or number-field drag becomes one step, recorded on release.
+  Escape during a gizmo drag restores the transforms, so the release finds nothing to record.
+- **Selection:** a change of selection alone doesn't make a step (Unity records selection
+  changes too; the history then fills with clicks). A step does store each touched entity's
+  selection, and applying a step selects exactly the touched entities that were selected on
+  that side. Undoing a move reselects what moved; undoing Ctrl+D reselects the originals.
+- **Handles survive undo.** A restored entity gets its old generation back, so a handle to a
+  deleted entity works again after undoing the delete. To keep handles unique anyway,
+  `Scene.slot_generations` remembers each slot's highest generation ever issued, and
+  `create_entity` counts up from that rather than from the current entity's generation.
+- **Memory:** fixed arrays in `Game_Memory` (256 steps, 8192 changed entities in total, about
+  2.4 MB with the committed copy), so the history survives hot reload with no allocator. When
+  full, the oldest steps are dropped. An edit touching more than 8192 entities isn't recorded;
+  the history is cleared with a message, because older steps would no longer match the scene.
+- **Not covered:** mesh assets (they're immutable and never freed today; mesh editing will
+  need its own undo data), the camera, and render settings (Unity doesn't undo scene view
+  navigation either). Steps have no names yet ("Undo Move"); the diff doesn't know which tool
+  made a change.
+- **Tests (`src/game/undo_test.odin`):** edit, undo, redo; selection-only changes; delete and
+  undo keeping the handle, and generations never reused (fails without `slot_generations`);
+  Ctrl+D undo reselecting the originals; a new edit ending the redo branch; dropping the
+  oldest steps when full; a multi-frame gizmo drag committed as in `game_update` making one
+  step.
