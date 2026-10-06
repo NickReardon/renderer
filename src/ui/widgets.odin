@@ -246,7 +246,8 @@ checkbox :: proc(state: ^Ui_State, label_text: string, value: ^bool) -> (changed
 }
 
 // A labelled number. Drag sideways to change it (`drag_speed` per point moved); click without
-// dragging to type a value, then Enter or click elsewhere to apply, Escape to cancel.
+// dragging to type a value, then Enter or click elsewhere to apply, Escape to cancel. Tab and
+// Shift+Tab apply it and move to the next or previous number box.
 number_field :: proc(
 	state: ^Ui_State,
 	label_text: string,
@@ -339,18 +340,17 @@ number_box :: proc(
 				}
 			}
 		}
-		if interaction.clicked && !state.drag_moved {
-			// A click without a drag starts typing, with the current value as the text.
-			state.edit_id = field_id.id
-			initial_text := fmt.bprintf(state.edit_buffer[:], "%g", value^)
-			state.edit_length = len(initial_text)
-			state.edit_all_selected = true
+		// A click without a drag starts typing. So does Tab from the box drawn before this one.
+		if (interaction.clicked && !state.drag_moved) || state.focus_request == .Next {
+			start_editing(state, field_id.id, value^)
+			state.focus_request = .None
 			editing = true
 		}
 	} else {
 		commit, cancel := edit_number_text(state)
 		clicked_elsewhere := state.input.mouse[.Left].pressed && !clay.PointerOver(field_id)
-		if commit || clicked_elsewhere {
+		tab := state.input.keys[.Tab].pressed || state.input.keys[.Tab].repeated
+		if commit || tab || clicked_elsewhere {
 			if parsed_value, parsed := strconv.parse_f32(string(state.edit_buffer[:state.edit_length])); parsed {
 				value^ = clamp(parsed_value, minimum, maximum)
 				changed = true
@@ -358,6 +358,20 @@ number_box :: proc(
 			}
 			state.edit_id = 0
 			editing = false
+			if tab {
+				// Tab moves the typing to the next box, Shift+Tab to the previous one, as in Unity
+				// and Godot. Boxes are visited in the order they are drawn. The previous box was
+				// drawn already, so it can start now; the next one hasn't been, so it picks up the
+				// request when it is (or finish_layout wraps around to the first box).
+				shift_held := state.input.keys[.Left_Shift].down || state.input.keys[.Right_Shift].down
+				if !shift_held {
+					state.focus_request = .Next
+				} else if state.previous_box_id != 0 {
+					start_editing(state, state.previous_box_id, state.previous_box_value)
+				} else {
+					state.focus_request = .Last // this is the first box: wrap around to the last
+				}
+			}
 		} else if cancel {
 			state.edit_id = 0
 			editing = false
@@ -397,7 +411,24 @@ number_box :: proc(
 	}
 	text(state, displayed_text, .Monospace)
 	clay._CloseElement()
+
+	// Remember the box for Shift+Tab from the next one, and the first box for Tab from the last.
+	if state.first_box_id == 0 {
+		state.first_box_id = field_id.id
+		state.first_box_value = value^
+	}
+	state.previous_box_id = field_id.id
+	state.previous_box_value = value^
 	return
+}
+
+// Starts typing into a number box, with its current value as the text, all selected.
+@(private)
+start_editing :: proc(state: ^Ui_State, field_id: u32, value: f32) {
+	state.edit_id = field_id
+	initial_text := fmt.bprintf(state.edit_buffer[:], "%g", value)
+	state.edit_length = len(initial_text)
+	state.edit_all_selected = true
 }
 
 // Children laid out left to right, sharing the width. Use as an `if` block.
@@ -467,7 +498,7 @@ edit_number_text :: proc(state: ^Ui_State) -> (commit, cancel: bool) {
 			state.edit_length -= 1
 		}
 	}
-	commit = state.input.keys[.Enter].pressed || state.input.keys[.Tab].pressed
+	commit = state.input.keys[.Enter].pressed
 	cancel = state.input.keys[.Escape].pressed
 	return
 }

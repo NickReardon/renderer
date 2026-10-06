@@ -324,6 +324,65 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	testing.expect_value(test, model.tool_clicks, 1)
 	free_all(context.temp_allocator)
 
+	// --- Tab applies the typed value and moves to the next number box, Shift+Tab to the previous
+	// one, wrapping around at either end. The box being typed into shows its text in brackets.
+	model.number, model.vector, model.inspected.speed = 5, {1, 2, 3}, 9
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	field_center, field_found = find_text(commands, "5.000")
+	testing.expect(test, field_found, "the number field should show 5.000")
+	press_mouse(&input, field_center)
+	run_frame(state, &input, &model)
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	type_text(&input, "6")
+	run_frame(state, &input, &model)
+	press_key(&input, .Tab)
+	run_frame(state, &input, &model)
+	testing.expect_value(test, model.number, 6)
+	testing.expect(test, typed_value_applied(state), "Tab applies the typed value (an undo step of its own)")
+	testing.expect(test, wants_keyboard(state), "the UI keeps the keyboard while tabbing")
+	expect_editing_text :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input, model: ^Test_Model, shown: string, message: string) {
+		next_input(input)
+		commands := run_frame(state, input, model)
+		_, found := find_text(commands, shown)
+		testing.expectf(test, found, "%s: expected a box showing %s", message, shown)
+	}
+	expect_editing_text(test, state, &input, &model, "[1]", "Tab from Number should edit Vector X")
+	press_key(&input, .Tab)
+	run_frame(state, &input, &model)
+	expect_editing_text(test, state, &input, &model, "[2]", "Tab from X should edit Y")
+	press_key(&input, .Tab)
+	input.keys[.Left_Shift] = {down = true, pressed = true}
+	run_frame(state, &input, &model)
+	input.keys[.Left_Shift] = {}
+	expect_editing_text(test, state, &input, &model, "[1]", "Shift+Tab from Y should edit X")
+	testing.expect(test, model.vector == {1, 2, 3}, "tabbing through without typing keeps the values")
+	press_key(&input, .Escape)
+	run_frame(state, &input, &model)
+	free_all(context.temp_allocator)
+
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	speed_center, speed_box_found := find_text(commands, "9.0")
+	testing.expect(test, speed_box_found, "the inspected Speed field should show 9.0")
+	press_mouse(&input, speed_center)
+	run_frame(state, &input, &model)
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	press_key(&input, .Tab)
+	run_frame(state, &input, &model)
+	expect_editing_text(test, state, &input, &model, "[6]", "Tab from the last box should wrap to the first")
+	press_key(&input, .Tab)
+	input.keys[.Left_Shift] = {down = true, pressed = true}
+	run_frame(state, &input, &model)
+	input.keys[.Left_Shift] = {}
+	expect_editing_text(test, state, &input, &model, "[9]", "Shift+Tab from the first box should wrap to the last")
+	press_key(&input, .Escape)
+	run_frame(state, &input, &model)
+	testing.expect(test, state.edit_id == 0, "Escape should stop editing")
+	free_all(context.temp_allocator)
+
 	// --- The mouse belongs to the viewport outside the panel, and to the UI over it.
 	move_mouse(&input, {100, 400})
 	run_frame(state, &input, &model)
