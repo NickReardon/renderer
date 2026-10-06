@@ -567,3 +567,24 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   90° about the view axis, and turns screen-right to screen-up; Pivot vs Center placement,
   fallback when the active object is deselected, rotation in place vs orbiting, and scale
   keeping vs spreading positions.
+
+## Tab between number boxes
+
+- **Tab / Shift+Tab** while typing into a number box apply the value and start typing into the
+  next / previous box with its text selected, wrapping around at either end (Unity, Godot).
+  Each applied value is its own undo step, through `ui.typed_value_applied` as for Enter.
+- **Order is drawing order, not a declared tab index.** Retained-mode toolkits keep a focus
+  chain of widget objects; an immediate-mode UI has no objects, but it does draw its widgets in
+  the same order every frame, and that order is already top-to-bottom, left-to-right (Position
+  X, Y, Z, then Rotation X...). Dear ImGui tabs the same way. So each box records itself as it
+  is drawn (`previous_box_id`, `first_box_id`), and nothing else has to be kept up to date.
+- **Moving forward needs one frame of lookahead:** the next box hasn't been drawn when Tab is
+  handled, so `focus_request = .Next` is left for it to pick up. Shift+Tab can start the
+  previous box at once. Requests nobody picked up (Tab from the last box, Shift+Tab from the
+  first) are resolved in `finish_layout` by wrapping to the first or last box.
+- **The box typed into is scrolled into view.** Every box takes part, including ones clipped
+  by a scrolled panel, so moving the typing sets `scroll_to_edit`. The next `begin_frame` reads
+  the box's position from the finished layout and moves the panel's Clay scroll position just
+  enough to show it. Reading last frame's layout costs one frame of delay; finding the box's
+  position mid-layout isn't possible, because Clay only positions elements in `EndLayout`.
+- Only number boxes take part; checkboxes and buttons have no keyboard focus yet.
