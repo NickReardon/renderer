@@ -174,6 +174,12 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	render.begin_frame(renderer, input.window_size)
 	ui.begin_frame(user_interface, input)
 	draw_editor_ui(game_memory, input)
+	// A typed Inspector value is a finished edit, even when it was applied by pressing the mouse
+	// on something else. Record it now, before that press starts its own action (a button's
+	// click, a drag), or the two would share one undo step.
+	if ui.typed_value_applied(user_interface) {
+		commit_undo_step(&game_memory.undo_history, &game_memory.scene)
+	}
 
 	// The 3D view only gets the mouse and keyboard when the UI isn't using them.
 	viewport_has_mouse := !ui.wants_mouse(user_interface)

@@ -212,6 +212,29 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	testing.expect_value(test, model.button_count, 1)
 	free_all(context.temp_allocator)
 
+	// --- Typing a value, then clicking a button: the press applies the value and reports it
+	// (undo records it then, as a step of its own); the button acts later, on release.
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	field_center, field_found = find_text(commands, "16.500")
+	testing.expect(test, field_found, "the number field should show 16.500")
+	press_mouse(&input, field_center)
+	run_frame(state, &input, &model)
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	type_text(&input, "3")
+	run_frame(state, &input, &model)
+	testing.expect(test, !typed_value_applied(state), "typing alone applies nothing")
+	press_mouse(&input, button_center)
+	run_frame(state, &input, &model)
+	testing.expect(test, model.number == 3 && typed_value_applied(state), "pressing elsewhere applies the typed value and reports it")
+	testing.expect_value(test, model.button_count, 1)
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	testing.expect(test, !typed_value_applied(state), "the report lasts one frame")
+	testing.expect_value(test, model.button_count, 2)
+	free_all(context.temp_allocator)
+
 	// --- A vector field: dragging the Y box changes only Y (20 points * 0.1 = +2).
 	next_input(&input)
 	commands = run_frame(state, &input, &model)

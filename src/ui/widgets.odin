@@ -354,6 +354,7 @@ number_box :: proc(
 			if parsed_value, parsed := strconv.parse_f32(string(state.edit_buffer[:state.edit_length])); parsed {
 				value^ = clamp(parsed_value, minimum, maximum)
 				changed = true
+				state.typed_value_applied = true
 			}
 			state.edit_id = 0
 			editing = false
