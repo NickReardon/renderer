@@ -1,0 +1,17 @@
+# Build output
+build/
+
+# Odin / MSVC artifacts outside build/
+*.exe
+*.dll
+*.pdb
+*.lib
+*.exp
+*.ilk
+*.obj
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
