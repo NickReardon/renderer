@@ -33,6 +33,7 @@ Game_API :: struct {
 	memory_pointer: proc() -> rawptr,
 	memory_size:    proc() -> int,
 	hot_reloaded:   proc(memory: rawptr),
+	frame_delay_milliseconds: proc() -> f32,
 
 	// Not looked up in the DLL (initialize_symbols only fills procedure and pointer fields).
 	__handle:       dynlib.Library,
@@ -40,7 +41,7 @@ Game_API :: struct {
 	version:        int,
 }
 
-GAME_API_PROCEDURE_COUNT :: 6
+GAME_API_PROCEDURE_COUNT :: 7
 
 main :: proc() {
 	if !sdl.Init({.VIDEO}) {
@@ -151,6 +152,14 @@ main :: proc() {
 		input.refresh_rate = 0
 		if display_mode := sdl.GetCurrentDisplayMode(sdl.GetDisplayForWindow(window)); display_mode != nil {
 			input.refresh_rate = display_mode.refresh_rate
+		}
+
+		// Low-latency vsync: sleep off most of the time this frame would otherwise spend waiting
+		// for the display, *before* reading input, so the input is fresh when the frame is drawn.
+		// SDL's precise delay uses high-resolution timers (Windows' plain Sleep can overshoot by
+		// 15 ms and miss the refresh).
+		if delay_milliseconds := game.frame_delay_milliseconds(); delay_milliseconds > 0 {
+			sdl.DelayPrecise(u64(delay_milliseconds * 1_000_000))
 		}
 
 		pixel_density := sdl.GetWindowPixelDensity(window)

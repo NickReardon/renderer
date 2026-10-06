@@ -31,35 +31,48 @@ init :: proc(renderer: ^Renderer, window: platform.Native_Window, window_size: [
 		return false
 	}
 
-	// Adapter: a physical GPU (plus backend) that can present to our surface.
+	// Adapter: a physical GPU (plus backend) that can present to our surface. On Windows, D3D12
+	// first: its presentation keeps vsync and a one-frame queue working on laptops whose display
+	// is driven by a different GPU than the one rendering. Vulkan there either ignored vsync
+	// with a one-frame queue or needed two frames queued (docs/DESIGN.md, "Input latency").
+	// Any other backend if D3D12 isn't available.
 	Adapter_Request :: struct {
 		done:    bool,
 		adapter: wgpu.Adapter,
 	}
-	adapter_request: Adapter_Request
-	on_adapter :: proc "c" (status: wgpu.RequestAdapterStatus, adapter: wgpu.Adapter, message: string, user_data, user_data_2: rawptr) {
-		context = runtime.default_context()
-		request := (^Adapter_Request)(user_data)
-		request.done = true
-		if status == .Success {
-			request.adapter = adapter
-		} else {
-			fmt.eprintfln("render: adapter request failed (%v): %s", status, message)
+	request_adapter :: proc(instance: wgpu.Instance, surface: wgpu.Surface, backend: wgpu.BackendType) -> wgpu.Adapter {
+		adapter_request: Adapter_Request
+		on_adapter :: proc "c" (status: wgpu.RequestAdapterStatus, adapter: wgpu.Adapter, message: string, user_data, user_data_2: rawptr) {
+			context = runtime.default_context()
+			request := (^Adapter_Request)(user_data)
+			request.done = true
+			if status == .Success {
+				request.adapter = adapter
+			} else {
+				fmt.eprintfln("render: adapter request failed (%v): %s", status, message)
+			}
 		}
+		wgpu.InstanceRequestAdapter(
+			instance,
+			&{compatibleSurface = surface, powerPreference = .HighPerformance, backendType = backend},
+			{mode = .AllowProcessEvents, callback = on_adapter, userdata1 = &adapter_request},
+		)
+		for !adapter_request.done {
+			wgpu.InstanceProcessEvents(instance)
+		}
+		return adapter_request.adapter
 	}
-	wgpu.InstanceRequestAdapter(
-		renderer.instance,
-		&{compatibleSurface = renderer.surface, powerPreference = .HighPerformance},
-		{mode = .AllowProcessEvents, callback = on_adapter, userdata1 = &adapter_request},
-	)
-	for !adapter_request.done {
-		wgpu.InstanceProcessEvents(renderer.instance)
+	PREFERRED_BACKEND :: wgpu.BackendType.D3D12 when ODIN_OS == .Windows else wgpu.BackendType.Undefined
+	renderer.adapter = request_adapter(renderer.instance, renderer.surface, PREFERRED_BACKEND)
+	if renderer.adapter == nil && PREFERRED_BACKEND != .Undefined {
+		fmt.eprintfln("render: no %v adapter, trying the other backends", PREFERRED_BACKEND)
+		renderer.adapter = request_adapter(renderer.instance, renderer.surface, .Undefined)
 	}
-	renderer.adapter = adapter_request.adapter
 	if renderer.adapter == nil {
 		return false
 	}
 	if adapter_info, info_status := wgpu.AdapterGetInfo(renderer.adapter); info_status == .Success {
+		renderer.backend = adapter_info.backendType
 		fmt.printfln("render: %v on %s", adapter_info.backendType, adapter_info.device)
 		wgpu.AdapterInfoFreeMembers(adapter_info)
 	}
@@ -190,7 +203,16 @@ configure_surface :: proc(renderer: ^Renderer, size: [2]i32) {
 			present_mode = .Mailbox
 		}
 	}
+	// Let only one frame wait in the queue for the display (wgpu's default is two): each queued
+	// frame is a refresh interval between reading the mouse and showing the result. Not on
+	// Vulkan: on a hybrid-GPU laptop it stopped waiting for vsync at all with one (354 fps on a
+	// 60 Hz display), so it keeps wgpu's default.
+	frame_latency := wgpu.SurfaceConfigurationExtras{
+		chain = {sType = .SurfaceConfigurationExtras},
+		desiredMaximumFrameLatency = 2 if renderer.backend == .Vulkan else 1,
+	}
 	wgpu.SurfaceConfigure(renderer.surface, &{
+		nextInChain = &frame_latency,
 		device      = renderer.device,
 		format      = renderer.surface_format,
 		usage       = {.RenderAttachment, .CopySrc} if renderer.surface_copyable else {.RenderAttachment},

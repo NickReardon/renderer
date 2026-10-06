@@ -63,6 +63,7 @@ Render_Settings :: struct {
 	use_fsr:               bool, // off: bilinear upscaling
 	sharpness:             f32,  // 0..1, mapped to FSR RCAS stops (1 = strongest)
 	vsync:                 bool,
+	low_latency:           bool, // with vsync: read input just before the display is ready
 	msaa:                  bool, // 4x multisample anti-aliasing
 }
 
@@ -95,6 +96,7 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 		use_fsr               = true,
 		sharpness             = 0.8,
 		vsync                 = true,
+		low_latency           = true,
 		msaa                  = true,
 	}
 	apply_developer_flags(&game_memory.render_settings, arguments)
@@ -264,6 +266,7 @@ game_update :: proc(input: ^platform.Input) -> bool {
 		upscaler        = .Fsr if render_settings.use_fsr else .Bilinear,
 		sharpness_stops = (1 - clamp(render_settings.sharpness, 0, 1)) * 2, // 1 -> 0 stops (strongest), 0 -> 2 stops
 		vsync           = render_settings.vsync,
+		low_latency     = render_settings.low_latency,
 		msaa_samples    = 4 if render_settings.msaa else 1,
 	})
 	if captured_pixels != nil {
@@ -411,6 +414,9 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 		if ui.section(user_interface, "Rendering", &memory.rendering_section_open) {
 			settings := &memory.render_settings
 			ui.checkbox(user_interface, "VSync", &settings.vsync)
+			if settings.vsync {
+				ui.checkbox(user_interface, "Low latency", &settings.low_latency)
+			}
 			ui.checkbox(user_interface, "MSAA 4×", &settings.msaa)
 			ui.checkbox(user_interface, "Dynamic resolution", &settings.dynamic_enabled)
 			if settings.dynamic_enabled {
@@ -449,6 +455,10 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 			}
 			ui.label(user_interface, fmt.tprintf("mode    %s", mode_text), .Monospace)
 			ui.label(user_interface, fmt.tprintf("aa      %s", "MSAA 4×" if memory.render_settings.msaa else "off"), .Monospace)
+			// Low-latency vsync: how long each frame sleeps before reading input, and how long it
+			// still waits for the display afterwards (settles near 2 ms).
+			ui.label(user_interface, fmt.tprintf("sleep   %.1f ms", render.frame_delay_milliseconds(&memory.renderer)), .Monospace)
+			ui.label(user_interface, fmt.tprintf("wait    %.1f ms", memory.renderer.acquire_wait_milliseconds), .Monospace)
 			object_count := 0
 			for slot_index in 1 ..= memory.scene.highest_entity_slot {
 				if .Alive in memory.scene.entities[slot_index].flags {
@@ -470,6 +480,14 @@ game_shutdown :: proc() {
 	render.shutdown(&game_memory.renderer)
 	free(game_memory)
 	game_memory = nil
+}
+
+// Called by the host after each frame, before it reads input for the next: how long to sleep
+// first (low-latency vsync, see core/frame_pacing.odin). The host does the sleeping because
+// it has SDL's precise timer.
+@(export)
+game_frame_delay_milliseconds :: proc() -> f32 {
+	return render.frame_delay_milliseconds(&game_memory.renderer)
 }
 
 @(export)

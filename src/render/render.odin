@@ -17,6 +17,7 @@
 package render
 
 import "core:fmt"
+import "core:time"
 import "core:math"
 import "core:math/linalg"
 import "core:slice"
@@ -53,6 +54,7 @@ Frame_Settings :: struct {
 	upscaler:        Upscaler, // used when render_scale < 1
 	sharpness_stops: f32,      // FSR RCAS: 0 = strongest sharpening, each stop halves it
 	vsync:           bool,
+	low_latency:     bool,     // with vsync: pace frames so input is read just in time (core.Frame_Pacing)
 	msaa_samples:    u32,      // 1 (off) or 4; anything else means 1
 }
 
@@ -173,7 +175,10 @@ Renderer :: struct {
 	gamma_correct:     bool, // surface isn't sRGB, so shaders encode output themselves
 	surface_size:      [2]i32,
 	max_texture_size:  i32,
+	backend:           wgpu.BackendType,
 	vsync:             bool,
+	frame_pacing:      core.Frame_Pacing, // low-latency vsync; frame_delay_milliseconds reads it
+	acquire_wait_milliseconds: f32,       // how long the last frame blocked for a surface texture
 	immediate_present_supported: bool,
 	mailbox_present_supported:   bool,
 
@@ -342,6 +347,12 @@ debug_line :: proc(renderer: ^Renderer, start, end: [3]f32, color: [4]f32) {
 	renderer.line_vertex_count += 2
 }
 
+// How long the host should sleep after this frame, before reading input for the next one
+// (low-latency vsync; 0 when it's off). See core/frame_pacing.odin.
+frame_delay_milliseconds :: proc(renderer: ^Renderer) -> f32 {
+	return renderer.frame_pacing.delay_milliseconds
+}
+
 // 2D overlay, immediate mode: everything added here is drawn on top of the 3D scene, in the
 // order added, and forgotten at the next begin_frame.
 
@@ -461,9 +472,18 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		return // minimized
 	}
 
+	// With vsync this blocks until the display can take another frame. Timed for frame pacing.
+	acquire_start := time.tick_now()
 	surface_texture := wgpu.SurfaceGetCurrentTexture(renderer.surface)
+	acquire_wait := f32(time.duration_milliseconds(time.tick_since(acquire_start)))
 	switch surface_texture.status {
 	case .SuccessOptimal, .SuccessSuboptimal:
+		renderer.acquire_wait_milliseconds = acquire_wait
+		if settings.vsync && settings.low_latency {
+			core.update_frame_pacing(&renderer.frame_pacing, acquire_wait)
+		} else {
+			renderer.frame_pacing = {}
+		}
 	case .Timeout, .Outdated, .Lost:
 		// The swapchain no longer matches the window: rebuild it and skip this frame.
 		if surface_texture.texture != nil {
