@@ -74,7 +74,7 @@ src/host/      executable: SDL3 window, input, main loop, hot reload; only packa
 src/game/      editor + game, hot-reloaded DLL; all persistent state in Game_Memory
                game.odin (frame, settings, panels), scene.odin (entities, mesh assets),
                editor.odin (selection, picking, Hierarchy, Inspector, shortcuts), camera.odin,
-               gizmo.odin (Q W E R transform tools)
+               gizmo.odin (Q W E R transform tools), undo.odin (Ctrl+Z / Ctrl+Y)
 src/render/    renderer; only package using wgpu (render.odin API, device.odin, pipelines.odin, shaders/)
 src/ui/        immediate-mode UI; only package using Clay and fontstash; draws via render's overlay API
 src/core/      math and mesh; imports no engine package, no GPU or OS code; tests in core_test.odin
@@ -183,8 +183,6 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
 - **Batch files must have CRLF line endings,** or `goto` labels can break (`.gitattributes`
   enforces this). Editing `build.bat` with `sed` from the Bash tool can drop the CRs; check with
   `file build.bat` and restore them with `sed -i 's/\r*$/\r/' build.bat`.
-*$/
-/' build.bat`.
 - **Untyped float constants default to `f64`** when assigned with `:=`. Declare `f32`
   explicitly when the value is mixed with `[3]f32` math.
 - **Appending to `#soa[dynamic]T` needs a typed literal:** `append(&ps, Particle{...})`.

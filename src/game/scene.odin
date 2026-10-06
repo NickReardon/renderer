@@ -83,6 +83,10 @@ Mesh_Asset :: struct {
 Scene :: struct {
 	entities:            [MAX_ENTITIES]Entity, // slot 0 is the nil entity
 	highest_entity_slot: int,                  // loops run over 1 ..= highest_entity_slot
+	// The highest generation each slot has ever had. New entities count up from it, never from
+	// the slot's current entity: undo can bring back an entity with an older generation, and a
+	// handle must still never be reused for a different entity.
+	slot_generations:    [MAX_ENTITIES]u32,
 	mesh_assets:         [MAX_MESH_ASSETS]Mesh_Asset, // slot 0 unused
 	primitive_meshes:    [Primitive_Kind]Mesh_Asset_Handle,
 }
@@ -143,7 +147,8 @@ create_entity :: proc(scene: ^Scene, name: string) -> (Entity_Handle, ^Entity) {
 		if .Alive in entity.flags {
 			continue
 		}
-		generation := entity.generation + 1
+		scene.slot_generations[slot_index] += 1
+		generation := scene.slot_generations[slot_index]
 		entity^ = {generation = generation, flags = {.Alive}, scale = {1, 1, 1}, color = {0.8, 0.8, 0.8}}
 		set_entity_name(entity, name)
 		scene.highest_entity_slot = max(scene.highest_entity_slot, slot_index)
