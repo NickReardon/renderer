@@ -17,6 +17,11 @@ build.bat test     run the core and UI tests
 build.bat run      full build, then start the engine
 build\engine.exe --screenshot                 save frame 30 to build\screenshot.bmp, then exit
 build\engine.exe --screenshot-after-reload    same, 30 frames after the first hot reload
+  --screenshot-frame=N    capture N frames after the trigger instead of 30
+  --render-scale=50       fixed render scale in percent (50..200)
+  --upscaler=bilinear     bilinear instead of FSR 1
+  --dynamic               dynamic resolution on
+  --target-fps=120        dynamic resolution's target (default: display refresh rate)
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't
@@ -39,6 +44,14 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   viewer, camera forward = -Z).** Use `core.WORLD_RIGHT`, `core.WORLD_UP`, `core.WORLD_FORWARD`;
   don't hard-code axes. Axis colors: X red, Y green, Z blue.
 - **Reverse-Z depth:** the near plane is depth 1, clear depth to 0, compare `.Greater`.
+- **Frame structure (render/):**
+  - scene pass into `scene_color` (sRGB) at render resolution, within targets allocated at
+    window × 2;
+  - FSR EASU pass (below 100% only);
+  - window pass: RCAS or bilinear resample into the viewport, then the UI overlay.
+
+  Scene shaders output **linear** color, because the target is sRGB. Only window-pass shaders
+  deal with `gamma_correct` / `surface_is_srgb`.
 - **Editor UX follows Unity's scene view:**
   - navigation: Alt+left orbit, middle pan, Alt+right or wheel zoom, right-drag fly with
     WASD/QE, F to frame;
@@ -157,6 +170,11 @@ the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of t
     fine).
 - **Odin `fmt` pads widths with zeros** (`%6.2f` printed `013.86`). Don't use widths for
   alignment.
+- **`os.args` is empty inside the game DLL;** only the executable's runtime parses the command
+  line. The host passes `arguments` to `game_init`.
+- **`dynamic` is an Odin keyword;** it can't be a field name.
+- **No `math.exp2` or `strings.cut_prefix` in this Odin version.** Use `math.pow(2, x)` and
+  `strings.has_prefix` plus slicing.
 - **The PowerShell tool blocks `Remove-Item` with variables in the path.** Use
   `[System.IO.File]::Delete(path)`.
 - **Odin only ships Windows binaries** for SDL3 and wgpu. macOS and Linux need SDL3 from the

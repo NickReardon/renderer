@@ -102,6 +102,45 @@ test_coordinate_system_is_right_handed :: proc(test: ^testing.T) {
 }
 
 @(test)
+test_dynamic_resolution :: proc(test: ^testing.T) {
+	budget: f32 = 16.667 // 60 fps; the controller aims for 90% of it, 15 ms
+
+	// Far over budget: drops, but by at most 15% in one adjustment.
+	dropped := next_render_scale(1.0, 40, budget, 0.5, 2.0)
+	testing.expectf(test, dropped < 1.0 && dropped >= 0.85 - EPSILON, "over budget should drop by at most 15%%, got %v", dropped)
+
+	// Far under budget: rises, by at most 5% (plus snapping to the next 2.5% step).
+	risen := next_render_scale(1.0, 2, budget, 0.5, 2.0)
+	testing.expectf(test, risen > 1.0 && risen <= 1.05 + EPSILON, "under budget should rise by at most 5%%, got %v", risen)
+
+	// Close to the 15 ms aim: no change, so the resolution doesn't pump.
+	testing.expect_value(test, next_render_scale(1.0, 15.2, budget, 0.5, 2.0), 1.0)
+
+	// Results snap to 2.5% steps.
+	snapped := next_render_scale(1.0, 20, budget, 0.5, 2.0)
+	steps := snapped / DYNAMIC_RESOLUTION_STEP
+	testing.expectf(test, abs(steps - math.round(steps)) < 1e-3, "scale %v should be a multiple of the step", snapped)
+
+	// Never outside the allowed range, in either direction.
+	testing.expect_value(test, next_render_scale(0.5, 100, budget, 0.5, 2.0), 0.5)
+	testing.expect_value(test, next_render_scale(2.0, 0.5, budget, 0.5, 2.0), 2.0)
+	testing.expect_value(test, next_render_scale(1.0, 2, budget, 0.5, 1.0), 1.0)
+
+	// Repeated adjustments converge near the budget: a GPU cost proportional to scale squared,
+	// 30 ms at scale 1, settles where cost is about 15 ms (scale ~0.71).
+	scale: f32 = 1
+	for _ in 0 ..< 40 {
+		simulated_milliseconds := 30 * scale * scale
+		scale = next_render_scale(scale, simulated_milliseconds, budget, 0.5, 2.0)
+	}
+	settled_milliseconds := 30 * scale * scale
+	testing.expectf(test, settled_milliseconds > 13 && settled_milliseconds < 16.7, "should settle near 15 ms, got %v ms at scale %v", settled_milliseconds, scale)
+
+	// No measurement yet: keep the current scale.
+	testing.expect_value(test, next_render_scale(1.25, 0, budget, 0.5, 2.0), 1.25)
+}
+
+@(test)
 test_perspective_reverse_z :: proc(test: ^testing.T) {
 	near: f32 = 0.1
 	projection := perspective_reverse_z(math.to_radians(f32(60)), 16.0 / 9.0, near)

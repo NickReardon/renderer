@@ -84,6 +84,7 @@ These eight shape the whole codebase. Together they are roughly a weekend.
 | Dmitry Sokolov, *tinyrenderer* — https://github.com/ssloy/tinyrenderer/wiki | Software rasterizer in ~500 lines. Optional side project to demystify the GPU. | 1 |
 | Stefan Reinalter, *Stateless, layered, multi-threaded rendering* — https://blog.molecular-matters.com/2014/11/06/stateless-layered-multi-threaded-rendering-part-1/ | Draw commands as plain data plus sort keys; extends Ericson's article. | 4 |
 | Yuriy O'Donnell, *FrameGraph: Extensible Rendering Architecture in Frostbite* (GDC 2017) — https://www.slideshare.net/DICEStudio/framegraph-extensible-rendering-architecture-in-frostbite | Render passes and resources as a graph. Phase 4, once there are shadows and post-processing. | 4 |
+| AMD, *FidelityFX Super Resolution 1* (source and docs) — https://github.com/GPUOpen-Effects/FidelityFX-FSR | EASU + RCAS, ported in `shaders/post.wgsl`. The header comments in `ffx_fsr1.h` explain input requirements (anti-aliased, perceptual color) and the algorithm. | 4 |
 | Google, *Filament* PBR documentation — https://google.github.io/filament/Filament.html | Clearest practical PBR derivation; drop-in BRDF code. | 4 |
 | Akenine-Möller et al., *Real-Time Rendering* (book, 4th ed.) — https://www.realtimerendering.com/ | The reference for real-time graphics. | all |
 | Pharr, Jakob, Humphreys, *Physically Based Rendering* (free online) — https://pbr-book.org/ | Path tracing and light transport, if the path-tracer route appeals. | later |

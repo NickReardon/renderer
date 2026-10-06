@@ -40,5 +40,6 @@ fn fragment_main(fragment: Vertex_Output) -> @location(0) vec4f {
 	let sky_color = vec3f(0.16, 0.18, 0.22);
 	let ambient = mix(ground_color, sky_color, normal.y * 0.5 + 0.5);
 	let lit_color = fragment.color.rgb * (ambient + diffuse * vec3f(1.0, 0.96, 0.9));
-	return vec4f(encode_output(lit_color), fragment.color.a);
+	// Linear output: the scene target is sRGB, so the hardware encodes it.
+	return vec4f(lit_color, fragment.color.a);
 }

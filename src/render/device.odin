@@ -81,10 +81,15 @@ init :: proc(renderer: ^Renderer, window: platform.Native_Window, window_size: [
 			fmt.eprintfln("render: device request failed (%v): %s", status, message)
 		}
 	}
+	// Optional features: GPU timestamps, for measuring frame cost (dynamic resolution).
+	renderer.timestamps_supported = bool(wgpu.AdapterHasFeature(renderer.adapter, .TimestampQuery))
+	required_features := [1]wgpu.FeatureName{.TimestampQuery}
 	wgpu.AdapterRequestDevice(
 		renderer.adapter,
 		&{
 			label = "engine device",
+			requiredFeatureCount = 1 if renderer.timestamps_supported else 0,
+			requiredFeatures = &required_features[0],
 			uncapturedErrorCallbackInfo = {callback = on_uncaptured_error},
 			deviceLostCallbackInfo = {mode = .AllowProcessEvents, callback = on_device_lost},
 		},
@@ -98,6 +103,9 @@ init :: proc(renderer: ^Renderer, window: platform.Native_Window, window_size: [
 		return false
 	}
 	renderer.queue = wgpu.DeviceGetQueue(renderer.device)
+	if limits, limits_status := wgpu.DeviceGetLimits(renderer.device); limits_status == .Success {
+		renderer.max_texture_size = i32(limits.maxTextureDimension2D)
+	}
 
 	// Prefer an sRGB surface format so the hardware converts our linear colors for display.
 	// If none is offered (WebGPU in browsers, for example), shaders encode output themselves.
@@ -115,11 +123,18 @@ init :: proc(renderer: ^Renderer, window: platform.Native_Window, window_size: [
 		}
 	}
 	renderer.surface_copyable = .CopySrc in capabilities.usages
+	for present_mode in capabilities.presentModes[:capabilities.presentModeCount] {
+		renderer.immediate_present_supported ||= present_mode == .Immediate
+		renderer.mailbox_present_supported ||= present_mode == .Mailbox
+	}
 	wgpu.SurfaceCapabilitiesFreeMembers(capabilities)
 	renderer.gamma_correct = renderer.surface_format != .BGRA8UnormSrgb && renderer.surface_format != .RGBA8UnormSrgb
+	renderer.vsync = true
 
-	configure_surface(renderer, window_size)
 	create_bindings(renderer)
+	create_timestamp_resources(renderer)
+	report_timestamp_support(renderer)
+	configure_surface(renderer, window_size)
 	return create_pipelines(renderer)
 }
 
@@ -131,7 +146,10 @@ shutdown :: proc(renderer: ^Renderer) {
 			wgpu.BufferRelease(mesh.index_buffer)
 		}
 	}
+	release_timestamp_resources(renderer)
 	release_pipelines(renderer)
+	release_scene_targets(renderer)
+	release_post_bindings(renderer)
 	release_atlas_texture(renderer)
 	if renderer.overlay_sampler != nil do wgpu.SamplerRelease(renderer.overlay_sampler)
 	if renderer.overlay_buffer != nil do wgpu.BufferRelease(renderer.overlay_buffer)
@@ -143,8 +161,6 @@ shutdown :: proc(renderer: ^Renderer) {
 	if renderer.line_buffer != nil do wgpu.BufferRelease(renderer.line_buffer)
 	if renderer.frame_layout != nil do wgpu.BindGroupLayoutRelease(renderer.frame_layout)
 	if renderer.instance_layout != nil do wgpu.BindGroupLayoutRelease(renderer.instance_layout)
-	if renderer.depth_view != nil do wgpu.TextureViewRelease(renderer.depth_view)
-	if renderer.depth_texture != nil do wgpu.TextureRelease(renderer.depth_texture)
 	if renderer.queue != nil do wgpu.QueueRelease(renderer.queue)
 	if renderer.device != nil do wgpu.DeviceRelease(renderer.device)
 	if renderer.adapter != nil do wgpu.AdapterRelease(renderer.adapter)
@@ -153,11 +169,24 @@ shutdown :: proc(renderer: ^Renderer) {
 	renderer^ = {}
 }
 
-// (Re)creates the swapchain and the depth buffer for a new window size.
+// (Re)creates the swapchain and the scene render targets for a new window size, or applies a
+// vsync change.
 configure_surface :: proc(renderer: ^Renderer, size: [2]i32) {
+	resized := size != renderer.surface_size || renderer.scene_color_texture == nil
 	renderer.surface_size = size
 	if size.x <= 0 || size.y <= 0 {
 		return
+	}
+
+	// Vsync waits for the display (Fifo, always supported). Without it, prefer Immediate (no
+	// waiting at all), then Mailbox (newest frame wins, no tearing).
+	present_mode := wgpu.PresentMode.Fifo
+	if !renderer.vsync {
+		if renderer.immediate_present_supported {
+			present_mode = .Immediate
+		} else if renderer.mailbox_present_supported {
+			present_mode = .Mailbox
+		}
 	}
 	wgpu.SurfaceConfigure(renderer.surface, &{
 		device      = renderer.device,
@@ -166,21 +195,12 @@ configure_surface :: proc(renderer: ^Renderer, size: [2]i32) {
 		width       = u32(size.x),
 		height      = u32(size.y),
 		alphaMode   = .Auto,
-		presentMode = .Fifo, // vsync; always supported
+		presentMode = present_mode,
 	})
 
-	if renderer.depth_view != nil do wgpu.TextureViewRelease(renderer.depth_view)
-	if renderer.depth_texture != nil do wgpu.TextureRelease(renderer.depth_texture)
-	renderer.depth_texture = wgpu.DeviceCreateTexture(renderer.device, &{
-		label         = "depth",
-		usage         = {.RenderAttachment},
-		dimension     = ._2D,
-		size          = {u32(size.x), u32(size.y), 1},
-		format        = DEPTH_FORMAT,
-		mipLevelCount = 1,
-		sampleCount   = 1,
-	})
-	renderer.depth_view = wgpu.TextureCreateView(renderer.depth_texture, nil)
+	if resized {
+		create_scene_targets(renderer, size)
+	}
 }
 
 @(private)

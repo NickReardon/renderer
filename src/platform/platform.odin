@@ -42,6 +42,7 @@ Input :: struct {
 	wheel:             f32,    // scroll steps this frame; positive = away from the user
 	window_size:       [2]i32, // drawable size in pixels (already scaled for high-DPI)
 	display_scale:     f32,    // UI scale the OS asks for: 1 = 96 DPI, 1.5 = 150% scaling
+	refresh_rate:      f32,    // the window's display, in Hz; 0 if unknown
 	delta_seconds:     f32,    // time since the previous frame
 	quit:              bool,   // the user asked to close the window
 	capture_requested: bool,   // save this frame to screenshot.bmp (host flag --screenshot)

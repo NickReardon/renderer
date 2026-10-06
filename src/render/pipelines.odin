@@ -86,6 +86,8 @@ create_bindings :: proc(renderer: ^Renderer) {
 		lodMaxClamp   = 32,
 		maxAnisotropy = 1,
 	})
+
+	create_post_bindings(renderer)
 }
 
 // (Re)creates the overlay atlas texture and the bind group that points at it.
@@ -161,12 +163,14 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 	})
 	defer wgpu.PipelineLayoutRelease(frame_and_overlay_layout)
 
-	opaque_target := wgpu.ColorTargetState{format = renderer.surface_format, writeMask = wgpu.ColorWriteMaskFlags_All}
+	// The scene renders into the sRGB scene texture; the overlay renders straight into the window.
+	scene_opaque_target := wgpu.ColorTargetState{format = SCENE_COLOR_FORMAT, writeMask = wgpu.ColorWriteMaskFlags_All}
 	alpha_blend := wgpu.BlendState{
 		color = {operation = .Add, srcFactor = .SrcAlpha, dstFactor = .OneMinusSrcAlpha},
 		alpha = {operation = .Add, srcFactor = .One, dstFactor = .OneMinusSrcAlpha},
 	}
-	blended_target := wgpu.ColorTargetState{format = renderer.surface_format, blend = &alpha_blend, writeMask = wgpu.ColorWriteMaskFlags_All}
+	scene_blended_target := wgpu.ColorTargetState{format = SCENE_COLOR_FORMAT, blend = &alpha_blend, writeMask = wgpu.ColorWriteMaskFlags_All}
+	window_blended_target := wgpu.ColorTargetState{format = renderer.surface_format, blend = &alpha_blend, writeMask = wgpu.ColorWriteMaskFlags_All}
 
 	// Reverse-Z: nearer fragments have *greater* depth.
 	depth_test_and_write := wgpu.DepthStencilState{format = DEPTH_FORMAT, depthWriteEnabled = .True, depthCompare = .Greater}
@@ -192,7 +196,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		primitive    = {topology = .TriangleList, frontFace = .CCW, cullMode = .Back},
 		depthStencil = &depth_test_and_write,
 		multisample  = single_sample,
-		fragment     = &wgpu.FragmentState{module = mesh_module, entryPoint = "fragment_main", targetCount = 1, targets = &opaque_target},
+		fragment     = &wgpu.FragmentState{module = mesh_module, entryPoint = "fragment_main", targetCount = 1, targets = &scene_opaque_target},
 	})
 
 	// Debug lines: one interleaved buffer of position + color.
@@ -213,7 +217,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		primitive    = {topology = .LineList},
 		depthStencil = &depth_test_and_write,
 		multisample  = single_sample,
-		fragment     = &wgpu.FragmentState{module = line_module, entryPoint = "fragment_main", targetCount = 1, targets = &opaque_target},
+		fragment     = &wgpu.FragmentState{module = line_module, entryPoint = "fragment_main", targetCount = 1, targets = &scene_opaque_target},
 	})
 
 	// Grid: no vertex buffers, the quad comes from vertex_index. Blended, no depth writes.
@@ -224,11 +228,11 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		primitive    = {topology = .TriangleList, cullMode = .None},
 		depthStencil = &depth_test_only,
 		multisample  = single_sample,
-		fragment     = &wgpu.FragmentState{module = grid_module, entryPoint = "fragment_main", targetCount = 1, targets = &blended_target},
+		fragment     = &wgpu.FragmentState{module = grid_module, entryPoint = "fragment_main", targetCount = 1, targets = &scene_blended_target},
 	})
 
-	// Overlay: one quad per instance, six generated vertices each. No depth test (the render
-	// pass has a depth buffer, so the pipeline must still declare its format).
+	// Overlay: one quad per instance, six generated vertices each, drawn into the window pass
+	// (which has no depth buffer).
 	overlay_attributes := [8]wgpu.VertexAttribute{
 		{format = .Float32x2, offset = u64(offset_of(Overlay_Quad, rect_min)), shaderLocation = 0},
 		{format = .Float32x2, offset = u64(offset_of(Overlay_Quad, rect_max)), shaderLocation = 1},
@@ -245,22 +249,21 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		attributeCount = len(overlay_attributes),
 		attributes     = &overlay_attributes[0],
 	}
-	no_depth_test := wgpu.DepthStencilState{format = DEPTH_FORMAT, depthWriteEnabled = .False, depthCompare = .Always}
 	overlay_pipeline := wgpu.DeviceCreateRenderPipeline(renderer.device, &{
 		label        = "overlay",
 		layout       = frame_and_overlay_layout,
 		vertex       = {module = overlay_module, entryPoint = "vertex_main", bufferCount = 1, buffers = &overlay_vertex_buffer},
 		primitive    = {topology = .TriangleList, cullMode = .None},
-		depthStencil = &no_depth_test,
 		multisample  = single_sample,
-		fragment     = &wgpu.FragmentState{module = overlay_module, entryPoint = "fragment_main", targetCount = 1, targets = &blended_target},
+		fragment     = &wgpu.FragmentState{module = overlay_module, entryPoint = "fragment_main", targetCount = 1, targets = &window_blended_target},
 	})
 
+	easu_pipeline, rcas_pipeline, resample_pipeline := create_post_pipelines(renderer)
+
 	if !pop_error_scope(renderer) {
-		if mesh_pipeline != nil do wgpu.RenderPipelineRelease(mesh_pipeline)
-		if line_pipeline != nil do wgpu.RenderPipelineRelease(line_pipeline)
-		if grid_pipeline != nil do wgpu.RenderPipelineRelease(grid_pipeline)
-		if overlay_pipeline != nil do wgpu.RenderPipelineRelease(overlay_pipeline)
+		for pipeline in ([]wgpu.RenderPipeline{mesh_pipeline, line_pipeline, grid_pipeline, overlay_pipeline, easu_pipeline, rcas_pipeline, resample_pipeline}) {
+			if pipeline != nil do wgpu.RenderPipelineRelease(pipeline)
+		}
 		return false
 	}
 
@@ -269,19 +272,27 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 	renderer.line_pipeline = line_pipeline
 	renderer.grid_pipeline = grid_pipeline
 	renderer.overlay_pipeline = overlay_pipeline
+	renderer.easu_pipeline = easu_pipeline
+	renderer.rcas_pipeline = rcas_pipeline
+	renderer.resample_pipeline = resample_pipeline
 	return true
 }
 
 @(private)
 release_pipelines :: proc(renderer: ^Renderer) {
-	if renderer.mesh_pipeline != nil do wgpu.RenderPipelineRelease(renderer.mesh_pipeline)
-	if renderer.line_pipeline != nil do wgpu.RenderPipelineRelease(renderer.line_pipeline)
-	if renderer.grid_pipeline != nil do wgpu.RenderPipelineRelease(renderer.grid_pipeline)
-	if renderer.overlay_pipeline != nil do wgpu.RenderPipelineRelease(renderer.overlay_pipeline)
-	renderer.mesh_pipeline = nil
-	renderer.line_pipeline = nil
-	renderer.grid_pipeline = nil
-	renderer.overlay_pipeline = nil
+	pipelines := [?]^wgpu.RenderPipeline{
+		&renderer.mesh_pipeline,
+		&renderer.line_pipeline,
+		&renderer.grid_pipeline,
+		&renderer.overlay_pipeline,
+		&renderer.easu_pipeline,
+		&renderer.rcas_pipeline,
+		&renderer.resample_pipeline,
+	}
+	for pipeline in pipelines {
+		if pipeline^ != nil do wgpu.RenderPipelineRelease(pipeline^)
+		pipeline^ = nil
+	}
 }
 
 @(private)

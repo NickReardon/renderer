@@ -15,6 +15,8 @@ import "core:image"
 import "core:image/bmp"
 import "core:math"
 import "core:math/linalg"
+import "core:strconv"
+import "core:strings"
 import "engine:core"
 import "engine:platform"
 import "engine:render"
@@ -35,14 +37,37 @@ Game_Memory :: struct {
 	view_section_open:     bool,
 	camera_section_open:   bool,
 	scene_section_open:    bool,
+	rendering_section_open: bool,
 	stats_section_open:    bool,
 	smoothed_frame_seconds: f32,
+
+	// Render resolution (see update_render_scale)
+	resolution:            Resolution_Settings,
+	render_scale:          f32, // the scale used this frame
+	smoothed_gpu_milliseconds: f32,
+	frames_since_scale_change: int,
 }
+
+// Fixed mode renders at `fixed_scale_percent`. Dynamic mode moves the scale between the minimum
+// and maximum to keep GPU time within the target frame rate's budget. Below 100% the scene is
+// upscaled (FSR 1 or bilinear); above 100% it is supersampled (rendered larger, filtered down).
+Resolution_Settings :: struct {
+	dynamic_enabled:       bool,
+	fixed_scale_percent:   f32,
+	minimum_scale_percent: f32,
+	maximum_scale_percent: f32,
+	target_frame_rate:     f32, // 0 = match the display's refresh rate
+	use_fsr:               bool, // off: bilinear upscaling
+	sharpness:             f32,  // 0..1, mapped to FSR RCAS stops (1 = strongest)
+	vsync:                 bool,
+}
+
+SCALE_ADJUST_INTERVAL_FRAMES :: 8 // let a few new GPU measurements arrive between adjustments
 
 game_memory: ^Game_Memory
 
 @(export)
-game_init :: proc(window: platform.Native_Window, window_size: [2]i32) -> bool {
+game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments: []string) -> bool {
 	game_memory = new(Game_Memory)
 	game_memory.window = window
 	if !render.init(&game_memory.renderer, window, window_size) {
@@ -58,7 +83,20 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32) -> bool {
 	game_memory.view_section_open = true
 	game_memory.camera_section_open = true
 	game_memory.scene_section_open = true
+	game_memory.rendering_section_open = true
 	game_memory.stats_section_open = true
+	game_memory.resolution = {
+		dynamic_enabled       = false,
+		fixed_scale_percent   = 100,
+		minimum_scale_percent = 50,
+		maximum_scale_percent = 200,
+		target_frame_rate     = 0,
+		use_fsr               = true,
+		sharpness             = 0.8,
+		vsync                 = true,
+	}
+	apply_developer_flags(&game_memory.resolution, arguments)
+	game_memory.render_scale = game_memory.resolution.fixed_scale_percent / 100
 
 	// Build the cube on the CPU in the engine's mesh format, triangulate it for flat shading,
 	// and upload it. The CPU copies are temporary; only the GPU mesh is kept.
@@ -160,15 +198,82 @@ game_update :: proc(input: ^platform.Input) -> bool {
 		viewport_max = viewport_max,
 	}
 
+	update_render_scale(game_memory, input)
+	resolution := game_memory.resolution
 	captured_pixels := render.end_frame(renderer, camera, {
-		clear_color = {0.1, 0.105, 0.12, 1},
-		show_grid   = game_memory.show_grid,
-		capture     = input.capture_requested,
+		clear_color     = {0.1, 0.105, 0.12, 1},
+		show_grid       = game_memory.show_grid,
+		capture         = input.capture_requested,
+		render_scale    = game_memory.render_scale,
+		upscaler        = .Fsr if resolution.use_fsr else .Bilinear,
+		sharpness_stops = (1 - clamp(resolution.sharpness, 0, 1)) * 2, // 1 -> 0 stops (strongest), 0 -> 2 stops
+		vsync           = resolution.vsync,
 	})
 	if captured_pixels != nil {
 		save_screenshot("screenshot.bmp", captured_pixels, renderer.surface_size)
 	}
 	return true
+}
+
+// Picks this frame's render scale: the fixed setting, or the dynamic controller's choice based on
+// recent GPU frame time and the target frame rate.
+update_render_scale :: proc(memory: ^Game_Memory, input: ^platform.Input) {
+	settings := &memory.resolution
+	if !settings.dynamic_enabled {
+		memory.render_scale = settings.fixed_scale_percent / 100
+		memory.frames_since_scale_change = 0
+		return
+	}
+
+	gpu_milliseconds := memory.renderer.gpu_frame_milliseconds
+	if gpu_milliseconds <= 0 {
+		return // no measurement yet (or this GPU can't measure): keep the current scale
+	}
+	if memory.smoothed_gpu_milliseconds == 0 {
+		memory.smoothed_gpu_milliseconds = gpu_milliseconds
+	}
+	memory.smoothed_gpu_milliseconds = math.lerp(memory.smoothed_gpu_milliseconds, gpu_milliseconds, f32(0.2))
+
+	memory.frames_since_scale_change += 1
+	if memory.frames_since_scale_change < SCALE_ADJUST_INTERVAL_FRAMES {
+		return
+	}
+	memory.frames_since_scale_change = 0
+	frame_budget_milliseconds := 1000 / effective_target_frame_rate(settings^, input)
+	minimum_scale := min(settings.minimum_scale_percent, settings.maximum_scale_percent) / 100
+	maximum_scale := max(settings.minimum_scale_percent, settings.maximum_scale_percent) / 100
+	memory.render_scale = core.next_render_scale(memory.render_scale, memory.smoothed_gpu_milliseconds, frame_budget_milliseconds, minimum_scale, maximum_scale)
+}
+
+effective_target_frame_rate :: proc(settings: Resolution_Settings, input: ^platform.Input) -> f32 {
+	if settings.target_frame_rate > 0 {
+		return settings.target_frame_rate
+	}
+	return input.refresh_rate if input.refresh_rate > 0 else 60
+}
+
+// Developer flags for scripted checks (e.g. with --screenshot):
+//   --render-scale=50    fixed render scale in percent
+//   --target-fps=120     dynamic resolution's target frame rate
+//   --upscaler=bilinear  bilinear instead of FSR
+//   --dynamic            dynamic resolution on
+apply_developer_flags :: proc(settings: ^Resolution_Settings, arguments: []string) {
+	for argument in arguments {
+		if strings.has_prefix(argument, "--render-scale=") {
+			value := argument[len("--render-scale="):]
+			if percent, parsed := strconv.parse_f32(value); parsed {
+				settings.fixed_scale_percent = clamp(percent, 50, 200)
+			}
+		} else if strings.has_prefix(argument, "--target-fps=") {
+			if frame_rate, parsed := strconv.parse_f32(argument[len("--target-fps="):]); parsed {
+				settings.target_frame_rate = clamp(frame_rate, 20, 10000)
+			}
+		} else if argument == "--upscaler=bilinear" {
+			settings.use_fsr = false
+		} else if argument == "--dynamic" {
+			settings.dynamic_enabled = true
+		}
+	}
 }
 
 // Writes an RGBA8 frame to a BMP file (Odin's core library writes BMP; no extra dependency).
@@ -221,11 +326,45 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 			ui.number_field(user_interface, "Rotation speed", &memory.rotation_speed, 0.01, -10, 10, "%.2f")
 		}
 
+		if ui.section(user_interface, "Rendering", &memory.rendering_section_open) {
+			settings := &memory.resolution
+			ui.checkbox(user_interface, "VSync", &settings.vsync)
+			ui.checkbox(user_interface, "Dynamic resolution", &settings.dynamic_enabled)
+			if settings.dynamic_enabled {
+				target := effective_target_frame_rate(settings^, input)
+				if ui.number_field(user_interface, "Target fps", &target, 0.5, 20, 500, "%.0f") {
+					settings.target_frame_rate = target
+				}
+				ui.number_field(user_interface, "Minimum scale", &settings.minimum_scale_percent, 0.5, 50, 200, "%.0f%%")
+				ui.number_field(user_interface, "Maximum scale", &settings.maximum_scale_percent, 0.5, 50, 200, "%.0f%%")
+			} else {
+				ui.number_field(user_interface, "Render scale", &settings.fixed_scale_percent, 0.5, 50, 200, "%.0f%%")
+			}
+			ui.checkbox(user_interface, "FSR upscaling (off: bilinear)", &settings.use_fsr)
+			if settings.use_fsr {
+				ui.number_field(user_interface, "Sharpness", &settings.sharpness, 0.005, 0, 1, "%.2f")
+			}
+		}
+
 		if ui.section(user_interface, "Statistics", &memory.stats_section_open) {
 			frame_milliseconds := memory.smoothed_frame_seconds * 1000
 			frames_per_second := 1 / max(memory.smoothed_frame_seconds, 0.0001)
 			ui.label(user_interface, fmt.tprintf("frame   %.2f ms", frame_milliseconds), .Monospace)
 			ui.label(user_interface, fmt.tprintf("fps     %.0f", frames_per_second), .Monospace)
+			if memory.renderer.gpu_frame_milliseconds > 0 {
+				ui.label(user_interface, fmt.tprintf("gpu     %.2f ms", memory.renderer.gpu_frame_milliseconds), .Monospace)
+			} else {
+				ui.label(user_interface, "gpu     n/a", .Monospace)
+			}
+			render_size := memory.renderer.render_size
+			ui.label(user_interface, fmt.tprintf("render  %d × %d (%.0f%%)", render_size.x, render_size.y, memory.render_scale * 100), .Monospace)
+			mode_text := "native"
+			if memory.render_scale < 0.999 {
+				mode_text = "FSR 1 upscale" if memory.resolution.use_fsr else "bilinear upscale"
+			} else if memory.render_scale > 1.001 {
+				mode_text = "supersampling"
+			}
+			ui.label(user_interface, fmt.tprintf("mode    %s", mode_text), .Monospace)
 			ui.label(user_interface, fmt.tprintf("window  %d × %d", input.window_size.x, input.window_size.y), .Monospace)
 			ui.label(user_interface, fmt.tprintf("scale   %.2f", input.display_scale), .Monospace)
 		}

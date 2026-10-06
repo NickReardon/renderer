@@ -29,3 +29,14 @@ The Inspector panel on the right edits the view, camera and scene. Number fields
 | Esc | Quit |
 
 Coordinates are right-handed: X right, Y up, Z toward the viewer.
+
+## Render resolution
+
+The Inspector's **Rendering** section sets the 3D view's resolution:
+- **Fixed:** a render scale from 50% to 200%.
+- **Dynamic:** a target frame rate, and the scale moves between a minimum and maximum to hold
+  it, measured with GPU timestamps.
+
+Below 100% the image is upscaled with AMD FSR 1 (or bilinear, to compare). Above 100% it is
+supersampled: rendered larger, then filtered down. Statistics shows GPU time, the render size
+and the current mode.

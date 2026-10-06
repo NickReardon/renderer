@@ -15,5 +15,5 @@ fn vertex_main(@location(0) position: vec3f, @location(1) color: vec4f) -> Verte
 
 @fragment
 fn fragment_main(fragment: Vertex_Output) -> @location(0) vec4f {
-	return vec4f(encode_output(fragment.color.rgb), fragment.color.a);
+	return fragment.color; // linear; the sRGB scene target encodes it
 }

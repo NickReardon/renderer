@@ -245,3 +245,50 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
   - simulation uses the variable frame time.
 - **Planned:** a fixed simulation step with interpolated rendering (*Fix Your Timestep*) in the
   engine phase; possibly an uncapped present mode (Mailbox or Immediate) toggle for profiling.
+
+## Render resolution: fixed or dynamic, 50–200%, FSR 1 below native, supersampling above
+
+- **Chosen:**
+  - one render scale controls the scene's resolution relative to the viewport. **Fixed mode**
+    uses a set scale. **Dynamic mode** moves it between a minimum and maximum (default 50–200%)
+    to keep GPU time within the target frame rate's budget (default: the display's refresh
+    rate);
+  - below 100%, **AMD FSR 1** upscales: EASU (edge-adaptive upsampling) then RCAS
+    (contrast-adaptive sharpening), ported from `ffx_fsr1.h` (MIT) to WGSL in
+    `shaders/post.wgsl`. Bilinear upscaling is available for comparison;
+  - above 100%, **supersampling**: the scene renders larger and a bilinear pass filters it down
+    in linear light (an exact 2×2 average at 200%);
+  - the UI is always drawn at native resolution, after scaling.
+- **How it's built:**
+  - scene color and depth targets are allocated once at the window size × 2 and the scene
+    renders into a sub-rectangle, so changing the scale never reallocates (as Unreal and
+    console engines do);
+  - the scene texture is sRGB with an RGBA8Unorm view of the same bytes: rendering and bilinear
+    sampling go through the sRGB view (linear values), while FSR reads the encoded values it
+    expects through the other view;
+  - **GPU timing** uses timestamp queries (the first pass's start, the window pass's end), read
+    back asynchronously through a ring of 4 buffers, so measuring never stalls. CPU frame time
+    is useless here: with vsync it's always about one refresh interval;
+  - **the controller** (`core.next_render_scale`, unit-tested) aims for 90% of the budget,
+    ignores errors within ±6%, drops at most 15% and rises at most 5% per adjustment, snaps
+    to 2.5% steps, and adjusts every 8 frames. It assumes GPU cost grows with scale squared.
+- **Precedents:** Unreal's screen percentage and dynamic resolution; Unity's dynamic resolution.
+  Usually dynamic resolution only goes down to native, and supersampling is a separate fixed
+  setting. Here both modes cover the full range, by the owner's choice, which makes
+  performance scaling easy to test.
+- **Known limits:**
+  - FSR 1 needs anti-aliased input. With no anti-aliasing yet, it upscales stair-steps
+    (sharper than bilinear, but 2-pixel steps at 50%). Adding MSAA or TAA is the next step for
+    image quality;
+  - temporal upscaling (FSR 2/3-style) needs motion vectors and camera jitter, and is a later
+    project;
+  - EASU may sample one texel beyond the rendered area at its right and bottom edges (the
+    cleared color); not visible in practice so far.
+- **Verified:**
+  - captures at 100%, FSR 50%, bilinear 50% and 200% show the expected differences (zoomed
+    comparison);
+  - dynamic mode climbed to 200% when far under budget and dropped to 50% with an unreachable
+    5000 fps target;
+  - hot reload with FSR active works.
+- **Also added:** a VSync toggle. Off uses Immediate, falling back to Mailbox if Immediate isn't
+  supported.

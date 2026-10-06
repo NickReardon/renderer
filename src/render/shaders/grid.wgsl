@@ -66,5 +66,5 @@ fn fragment_main(fragment: Vertex_Output) -> @location(0) vec4f {
 	let distance_to_camera = length(fragment.ground_position - frame.camera_position.xz);
 	alpha *= 1.0 - smoothstep(GRID_EXTENT * 0.2, GRID_EXTENT * 0.8, distance_to_camera);
 
-	return vec4f(encode_output(color), alpha);
+	return vec4f(color, alpha); // linear; the sRGB scene target encodes it
 }

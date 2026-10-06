@@ -19,13 +19,15 @@ package main
 import "core:dynlib"
 import "core:fmt"
 import "core:os"
+import "core:strconv"
+import "core:strings"
 import "core:time"
 import sdl "vendor:sdl3"
 import "engine:platform"
 
 // Procedures exported by the game DLL as `game_<field name>`.
 Game_API :: struct {
-	init:           proc(window: platform.Native_Window, window_size: [2]i32) -> bool,
+	init:           proc(window: platform.Native_Window, window_size: [2]i32, arguments: []string) -> bool,
 	update:         proc(input: ^platform.Input) -> bool,
 	shutdown:       proc(),
 	memory_pointer: proc() -> rawptr,
@@ -92,7 +94,7 @@ main :: proc() {
 	}
 	initial_size := window_pixel_size(window)
 	fmt.printfln("host: window %dx%d pixels (pixel density %.2f)", initial_size.x, initial_size.y, sdl.GetWindowPixelDensity(window))
-	if !game.init(native, initial_size) {
+	if !game.init(native, initial_size, os.args[1:]) {
 		fmt.eprintln("host: game failed to initialize")
 		return
 	}
@@ -103,7 +105,8 @@ main :: proc() {
 	// saves the frame to screenshot.bmp, then the host exits.
 	//   --screenshot                 capture 30 frames after start
 	//   --screenshot-after-reload    capture 30 frames after the first hot reload
-	FRAMES_BEFORE_SCREENSHOT :: 30
+	//   --screenshot-frame=N         capture N frames after the trigger instead of 30
+	frames_before_screenshot := 30
 	Screenshot_Mode :: enum {
 		None,
 		After_Start,
@@ -111,11 +114,15 @@ main :: proc() {
 	}
 	screenshot_mode := Screenshot_Mode.None
 	for argument in os.args[1:] {
-		switch argument {
-		case "--screenshot":
+		switch {
+		case argument == "--screenshot":
 			screenshot_mode = .After_Start
-		case "--screenshot-after-reload":
+		case argument == "--screenshot-after-reload":
 			screenshot_mode = .After_Reload
+		case strings.has_prefix(argument, "--screenshot-frame="):
+			if frame_count, parsed := strconv.parse_int(argument[len("--screenshot-frame="):]); parsed && frame_count > 0 {
+				frames_before_screenshot = frame_count
+			}
 		}
 	}
 	frames_since_trigger := 0
@@ -128,7 +135,7 @@ main :: proc() {
 		if screenshot_triggered {
 			frames_since_trigger += 1
 		}
-		input.capture_requested = screenshot_triggered && frames_since_trigger == FRAMES_BEFORE_SCREENSHOT
+		input.capture_requested = screenshot_triggered && frames_since_trigger == frames_before_screenshot
 		// Edges and per-frame deltas only last one frame.
 		for &key in input.keys {
 			key.pressed, key.released, key.repeated = false, false, false
@@ -140,6 +147,10 @@ main :: proc() {
 		input.wheel = 0
 		input.text_input_length = 0
 		input.display_scale = sdl.GetWindowDisplayScale(window)
+		input.refresh_rate = 0
+		if display_mode := sdl.GetCurrentDisplayMode(sdl.GetDisplayForWindow(window)); display_mode != nil {
+			input.refresh_rate = display_mode.refresh_rate
+		}
 
 		pixel_density := sdl.GetWindowPixelDensity(window)
 		event: sdl.Event
@@ -175,7 +186,7 @@ main :: proc() {
 				game.shutdown()
 				append(&previous_games, game)
 				game = new_game
-				if !game.init(native, window_pixel_size(window)) {
+				if !game.init(native, window_pixel_size(window), os.args[1:]) {
 					fmt.eprintln("host: game failed to initialize after restart")
 					break main_loop
 				}

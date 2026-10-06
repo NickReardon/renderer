@@ -45,9 +45,21 @@ Camera :: struct {
 }
 
 Frame_Settings :: struct {
-	clear_color: [4]f32, // linear
-	show_grid:   bool,
-	capture:     bool,   // read this frame back to the CPU; end_frame returns the pixels
+	clear_color:     [4]f32,   // linear
+	show_grid:       bool,
+	capture:         bool,     // read this frame back to the CPU; end_frame returns the pixels
+	render_scale:    f32,      // scene resolution / viewport resolution, MIN..MAX_RENDER_SCALE; 0 = 1
+	upscaler:        Upscaler, // used when render_scale < 1
+	sharpness_stops: f32,      // FSR RCAS: 0 = strongest sharpening, each stop halves it
+	vsync:           bool,
+}
+
+MIN_RENDER_SCALE :: 0.25
+MAX_RENDER_SCALE :: 2.0
+
+Upscaler :: enum {
+	Fsr,      // AMD FSR 1: EASU edge-adaptive upscale + RCAS sharpening
+	Bilinear, // plain bilinear filtering, for comparison
 }
 
 Draw :: struct {
@@ -110,6 +122,31 @@ Instance_Data :: struct {
 }
 #assert(size_of(Instance_Data) == 144)
 
+// Must match `Post_Uniforms` in shaders/post.wgsl.
+Post_Uniforms :: struct {
+	easu_constants:  [4][4]f32,
+	output_offset:   [2]f32,
+	output_size:     [2]f32,
+	source_uv_scale: [2]f32,
+	rcas_sharpness:  f32,
+	surface_is_srgb: f32,
+}
+#assert(size_of(Post_Uniforms) == 96)
+
+TIMESTAMP_READBACK_COUNT :: 4
+
+Timestamp_Readback :: struct {
+	buffer: wgpu.Buffer,
+	state:  Readback_State,
+}
+
+Readback_State :: enum {
+	Free,    // can receive this frame's timestamps
+	Pending, // copy submitted, waiting for the map to finish
+	Ready,   // mapped, values can be read
+	Failed,
+}
+
 Gpu_Mesh :: struct {
 	generation:       u32,
 	alive:            bool,
@@ -130,8 +167,39 @@ Renderer :: struct {
 	surface_copyable:  bool, // surface textures can be copied from (needed for frame capture)
 	gamma_correct:     bool, // surface isn't sRGB, so shaders encode output themselves
 	surface_size:      [2]i32,
-	depth_texture:     wgpu.Texture,
-	depth_view:        wgpu.TextureView,
+	max_texture_size:  i32,
+	vsync:             bool,
+	immediate_present_supported: bool,
+	mailbox_present_supported:   bool,
+
+	// Scene render targets and post passes (post.odin). The scene renders into scene_color at
+	// render resolution, then a post pass scales it into the window's viewport.
+	scene_target_size:        [2]i32, // allocated size: the window times MAX_RENDER_SCALE
+	scene_color_texture:      wgpu.Texture,
+	scene_color_view:         wgpu.TextureView, // sRGB view: render into it, filtered reads decode to linear
+	scene_color_encoded_view: wgpu.TextureView, // RGBA8Unorm view of the same bytes: FSR reads encoded values
+	scene_depth_texture:      wgpu.Texture,
+	scene_depth_view:         wgpu.TextureView,
+	upscaled_texture:         wgpu.Texture,     // EASU output at window size, read by RCAS
+	upscaled_view:            wgpu.TextureView,
+	post_layout:              wgpu.BindGroupLayout,
+	post_buffer:              wgpu.Buffer,
+	easu_group:               wgpu.BindGroup,
+	rcas_group:               wgpu.BindGroup,
+	resample_group:           wgpu.BindGroup,
+	easu_pipeline:            wgpu.RenderPipeline,
+	rcas_pipeline:            wgpu.RenderPipeline,
+	resample_pipeline:        wgpu.RenderPipeline,
+	render_size:              [2]i32, // scene resolution used for the last frame
+	render_scale:             f32,    // render_size / viewport size for the last frame
+
+	// GPU timing (post.odin): two timestamps per frame, read back a few frames later.
+	timestamps_supported:     bool,
+	timestamp_period:         f32,    // nanoseconds per timestamp tick
+	timestamp_query_set:      wgpu.QuerySet,
+	timestamp_resolve_buffer: wgpu.Buffer,
+	timestamp_readbacks:      [TIMESTAMP_READBACK_COUNT]Timestamp_Readback,
+	gpu_frame_milliseconds:   f32,    // most recent measurement; 0 until one arrives
 
 	// Bindings and pipelines (pipelines.odin)
 	frame_layout:      wgpu.BindGroupLayout,
@@ -344,11 +412,19 @@ append_overlay_quad :: proc(renderer: ^Renderer, quad: Overlay_Quad) {
 	renderer.overlay_batches[renderer.overlay_batch_count - 1].quad_count += 1
 }
 
-// Sorts the draw list, uploads this frame's data and records one render pass:
-// opaque meshes, then debug lines, then the transparent grid, then the 2D overlay.
-// With settings.capture, also returns the finished frame as RGBA8 rows (top row first,
-// temp-allocated, size = surface_size), or nil if capture isn't possible.
+// Records and submits the frame in three passes:
+//   1. scene:  meshes, debug lines and grid into scene_color, at render resolution
+//   2. EASU:   (FSR, render scale < 1 only) edge-adaptive upscale into the upscaled texture
+//   3. window: RCAS sharpening or bilinear resampling into the viewport, then the 2D overlay
+// Below 100% the scene is upscaled; above 100% (supersampling) the same bilinear pass filters
+// it down. With settings.capture, also returns the finished frame as RGBA8 rows (top row
+// first, temp-allocated, size = surface_size), or nil if capture isn't possible.
 end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings) -> (captured_pixels: []u8) {
+	collect_gpu_timings(renderer)
+	if settings.vsync != renderer.vsync {
+		renderer.vsync = settings.vsync
+		configure_surface(renderer, renderer.surface_size)
+	}
 	if renderer.surface_size.x <= 0 || renderer.surface_size.y <= 0 {
 		return // minimized
 	}
@@ -373,17 +449,18 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 	target_view := wgpu.TextureCreateView(surface_texture.texture, nil)
 	defer wgpu.TextureViewRelease(target_view)
 
-	// 1. Sort so draws of the same mesh are adjacent.
+	// Sort so draws of the same mesh are adjacent.
 	draws := renderer.draws[:renderer.draw_count]
 	slice.sort_by_key(draws, proc(draw: Draw) -> u64 {return draw.sort_key})
 
-	// 2. Upload per-frame data: camera, one instance record per draw, debug lines.
+	// Upload per-frame data: camera, one instance record per draw, debug lines, overlay quads.
+	surface_size := [2]f32{f32(renderer.surface_size.x), f32(renderer.surface_size.y)}
 	frame_uniforms := Frame_Uniforms{
 		view_projection = camera.projection * camera.view,
 		camera_position = camera.position,
 		gamma_correct   = 1 if renderer.gamma_correct else 0,
 		light_direction = linalg.normalize([3]f32{-0.4, -1, -0.3}),
-		viewport_size   = {f32(renderer.surface_size.x), f32(renderer.surface_size.y)},
+		viewport_size   = surface_size,
 	}
 	wgpu.QueueWriteBuffer(renderer.queue, renderer.frame_buffer, 0, &frame_uniforms, size_of(frame_uniforms))
 
@@ -408,90 +485,188 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		wgpu.QueueWriteBuffer(renderer.queue, renderer.overlay_buffer, 0, &renderer.overlay_quads[0], overlay_bytes)
 	}
 
-	// 3. Record the pass. Depth clears to 0 because depth is reversed (near = 1, far = 0).
-	clear_color := settings.clear_color
-	if renderer.gamma_correct {
-		for channel in 0 ..< 3 {
-			clear_color[channel] = math.pow(clear_color[channel], 1 / 2.2)
-		}
-	}
-	encoder := wgpu.DeviceCreateCommandEncoder(renderer.device, nil)
-	defer wgpu.CommandEncoderRelease(encoder)
-	pass := wgpu.CommandEncoderBeginRenderPass(encoder, &{
-		colorAttachmentCount   = 1,
-		colorAttachments       = &wgpu.RenderPassColorAttachment{
-			view       = target_view,
-			depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
-			loadOp     = .Clear,
-			storeOp    = .Store,
-			clearValue = {f64(clear_color.r), f64(clear_color.g), f64(clear_color.b), f64(clear_color.a)},
-		},
-		depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
-			view            = renderer.depth_view,
-			depthLoadOp     = .Clear,
-			depthStoreOp    = .Store,
-			depthClearValue = 0,
-		},
-	})
-
-	// The 3D scene (meshes, lines, grid) draws into the camera's viewport rectangle; the overlay
-	// below draws over the whole window.
-	surface_size := [2]f32{f32(renderer.surface_size.x), f32(renderer.surface_size.y)}
+	// The viewport: where in the window the scene appears, snapped to whole pixels so the post
+	// passes map window pixels to scene pixels exactly.
 	viewport_min, viewport_max := camera.viewport_min, camera.viewport_max
 	if viewport_max == {} {
 		viewport_max = surface_size
 	}
-	viewport_min = linalg.clamp(viewport_min, [2]f32{0, 0}, surface_size)
-	viewport_max = linalg.clamp(viewport_max, viewport_min, surface_size)
+	viewport_min = linalg.floor(linalg.clamp(viewport_min, [2]f32{0, 0}, surface_size))
+	viewport_max = linalg.floor(linalg.clamp(viewport_max, viewport_min, surface_size))
 	viewport_size := viewport_max - viewport_min
 	scene_visible := viewport_size.x >= 1 && viewport_size.y >= 1
+
+	// Render resolution: the viewport times the render scale, within the allocated targets.
+	render_scale := clamp(settings.render_scale if settings.render_scale > 0 else 1, MIN_RENDER_SCALE, MAX_RENDER_SCALE)
+	render_size := [2]i32{
+		clamp(i32(math.round(viewport_size.x * render_scale)), 1, renderer.scene_target_size.x),
+		clamp(i32(math.round(viewport_size.y * render_scale)), 1, renderer.scene_target_size.y),
+	}
+	renderer.render_size = render_size if scene_visible else {}
+	renderer.render_scale = render_scale
+	upscaling := f32(render_size.x) < viewport_size.x || f32(render_size.y) < viewport_size.y
+	use_fsr := settings.upscaler == .Fsr && upscaling && renderer.easu_pipeline != nil && renderer.rcas_pipeline != nil
+
+	scene_target_size := [2]f32{f32(renderer.scene_target_size.x), f32(renderer.scene_target_size.y)}
+	render_size_float := [2]f32{f32(render_size.x), f32(render_size.y)}
+	post_uniforms := Post_Uniforms{
+		easu_constants  = easu_constants(render_size_float, scene_target_size, viewport_size),
+		output_offset   = viewport_min,
+		output_size     = viewport_size,
+		source_uv_scale = render_size_float / scene_target_size,
+		rcas_sharpness  = math.pow(2, -max(settings.sharpness_stops, 0)), // stops to a linear amount
+		surface_is_srgb = 0 if renderer.gamma_correct else 1,
+	}
+	wgpu.QueueWriteBuffer(renderer.queue, renderer.post_buffer, 0, &post_uniforms, size_of(post_uniforms))
+
+	encoder := wgpu.DeviceCreateCommandEncoder(renderer.device, nil)
+	defer wgpu.CommandEncoderRelease(encoder)
+
+	// GPU timing: a timestamp at the start of the first pass and one at the end of the last,
+	// when a readback buffer is free to receive them.
+	timing_slot := -1
+	if renderer.timestamps_supported {
+		for readback, readback_index in renderer.timestamp_readbacks {
+			if readback.state == .Free {
+				timing_slot = readback_index
+				break
+			}
+		}
+	}
+	timing_this_frame := timing_slot >= 0
+
+	// --- Pass 1: the scene, at render resolution, into the top-left of scene_color.
+	if scene_visible {
+		scene_timestamps := wgpu.PassTimestampWrites{
+			querySet                  = renderer.timestamp_query_set,
+			beginningOfPassWriteIndex = 0,
+			endOfPassWriteIndex       = wgpu.QUERY_SET_INDEX_UNDEFINED,
+		}
+		clear_color := settings.clear_color // linear; the sRGB target encodes it
+		scene_pass := wgpu.CommandEncoderBeginRenderPass(encoder, &{
+			colorAttachmentCount   = 1,
+			colorAttachments       = &wgpu.RenderPassColorAttachment{
+				view       = renderer.scene_color_view,
+				depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
+				loadOp     = .Clear,
+				storeOp    = .Store,
+				clearValue = {f64(clear_color.r), f64(clear_color.g), f64(clear_color.b), f64(clear_color.a)},
+			},
+			// Depth clears to 0 because depth is reversed (near = 1, far = 0).
+			depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
+				view            = renderer.scene_depth_view,
+				depthLoadOp     = .Clear,
+				depthStoreOp    = .Discard,
+				depthClearValue = 0,
+			},
+			timestampWrites        = &scene_timestamps if timing_this_frame else nil,
+		})
+		wgpu.RenderPassEncoderSetViewport(scene_pass, 0, 0, render_size_float.x, render_size_float.y, 0, 1)
+		wgpu.RenderPassEncoderSetScissorRect(scene_pass, 0, 0, u32(render_size.x), u32(render_size.y))
+
+		if renderer.mesh_pipeline != nil && len(draws) > 0 {
+			wgpu.RenderPassEncoderSetPipeline(scene_pass, renderer.mesh_pipeline)
+			wgpu.RenderPassEncoderSetBindGroup(scene_pass, 0, renderer.frame_group)
+			wgpu.RenderPassEncoderSetBindGroup(scene_pass, 1, renderer.instance_group)
+			for run_start := 0; run_start < len(draws); {
+				// A run of draws using the same mesh becomes one instanced draw. Instance i of the
+				// run reads instance record run_start + i, because instance_index counts from
+				// firstInstance.
+				run_end := run_start + 1
+				for run_end < len(draws) && draws[run_end].mesh == draws[run_start].mesh {
+					run_end += 1
+				}
+				if mesh, found := get_mesh(renderer, draws[run_start].mesh); found {
+					wgpu.RenderPassEncoderSetVertexBuffer(scene_pass, 0, mesh.position_buffer, 0, wgpu.WHOLE_SIZE)
+					wgpu.RenderPassEncoderSetVertexBuffer(scene_pass, 1, mesh.normal_buffer, 0, wgpu.WHOLE_SIZE)
+					wgpu.RenderPassEncoderSetIndexBuffer(scene_pass, mesh.index_buffer, .Uint32, 0, wgpu.WHOLE_SIZE)
+					wgpu.RenderPassEncoderDrawIndexed(
+						scene_pass,
+						indexCount = mesh.index_count,
+						instanceCount = u32(run_end - run_start),
+						firstIndex = 0,
+						baseVertex = 0,
+						firstInstance = u32(run_start),
+					)
+				}
+				run_start = run_end
+			}
+		}
+
+		if renderer.line_pipeline != nil && renderer.line_vertex_count > 0 {
+			line_bytes := u64(renderer.line_vertex_count * size_of(Debug_Vertex))
+			wgpu.RenderPassEncoderSetPipeline(scene_pass, renderer.line_pipeline)
+			wgpu.RenderPassEncoderSetBindGroup(scene_pass, 0, renderer.frame_group)
+			wgpu.RenderPassEncoderSetVertexBuffer(scene_pass, 0, renderer.line_buffer, 0, line_bytes)
+			wgpu.RenderPassEncoderDraw(scene_pass, vertexCount = u32(renderer.line_vertex_count), instanceCount = 1, firstVertex = 0, firstInstance = 0)
+		}
+
+		// The grid is transparent, so it goes last, depth-tested against everything opaque.
+		if renderer.grid_pipeline != nil && settings.show_grid {
+			wgpu.RenderPassEncoderSetPipeline(scene_pass, renderer.grid_pipeline)
+			wgpu.RenderPassEncoderSetBindGroup(scene_pass, 0, renderer.frame_group)
+			wgpu.RenderPassEncoderDraw(scene_pass, vertexCount = 6, instanceCount = 1, firstVertex = 0, firstInstance = 0)
+		}
+
+		wgpu.RenderPassEncoderEnd(scene_pass)
+		wgpu.RenderPassEncoderRelease(scene_pass)
+	}
+
+	// --- Pass 2: FSR EASU, upscaling the scene to viewport size.
+	if scene_visible && use_fsr {
+		easu_pass := wgpu.CommandEncoderBeginRenderPass(encoder, &{
+			colorAttachmentCount = 1,
+			colorAttachments     = &wgpu.RenderPassColorAttachment{
+				view       = renderer.upscaled_view,
+				depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
+				loadOp     = .Clear,
+				storeOp    = .Store,
+			},
+		})
+		wgpu.RenderPassEncoderSetViewport(easu_pass, 0, 0, viewport_size.x, viewport_size.y, 0, 1)
+		wgpu.RenderPassEncoderSetPipeline(easu_pass, renderer.easu_pipeline)
+		wgpu.RenderPassEncoderSetBindGroup(easu_pass, 0, renderer.easu_group)
+		wgpu.RenderPassEncoderDraw(easu_pass, vertexCount = 3, instanceCount = 1, firstVertex = 0, firstInstance = 0)
+		wgpu.RenderPassEncoderEnd(easu_pass)
+		wgpu.RenderPassEncoderRelease(easu_pass)
+	}
+
+	// --- Pass 3: the window. The scene image goes into the viewport, then the overlay on top.
+	window_clear := settings.clear_color
+	if renderer.gamma_correct {
+		for channel in 0 ..< 3 {
+			window_clear[channel] = math.pow(window_clear[channel], 1 / 2.2)
+		}
+	}
+	window_timestamps := wgpu.PassTimestampWrites{
+		querySet                  = renderer.timestamp_query_set,
+		beginningOfPassWriteIndex = wgpu.QUERY_SET_INDEX_UNDEFINED if scene_visible else 0,
+		endOfPassWriteIndex       = 1,
+	}
+	pass := wgpu.CommandEncoderBeginRenderPass(encoder, &{
+		colorAttachmentCount = 1,
+		colorAttachments     = &wgpu.RenderPassColorAttachment{
+			view       = target_view,
+			depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
+			loadOp     = .Clear,
+			storeOp    = .Store,
+			clearValue = {f64(window_clear.r), f64(window_clear.g), f64(window_clear.b), f64(window_clear.a)},
+		},
+		timestampWrites      = &window_timestamps if timing_this_frame else nil,
+	})
+
 	if scene_visible {
 		wgpu.RenderPassEncoderSetViewport(pass, viewport_min.x, viewport_min.y, viewport_size.x, viewport_size.y, 0, 1)
 		wgpu.RenderPassEncoderSetScissorRect(pass, u32(viewport_min.x), u32(viewport_min.y), u32(viewport_size.x), u32(viewport_size.y))
-	}
-
-	if scene_visible && renderer.mesh_pipeline != nil && len(draws) > 0 {
-		wgpu.RenderPassEncoderSetPipeline(pass, renderer.mesh_pipeline)
-		wgpu.RenderPassEncoderSetBindGroup(pass, 0, renderer.frame_group)
-		wgpu.RenderPassEncoderSetBindGroup(pass, 1, renderer.instance_group)
-		for run_start := 0; run_start < len(draws); {
-			// A run of draws using the same mesh becomes one instanced draw. Instance i of the
-			// run reads instance record run_start + i, because instance_index counts from
-			// firstInstance.
-			run_end := run_start + 1
-			for run_end < len(draws) && draws[run_end].mesh == draws[run_start].mesh {
-				run_end += 1
-			}
-			if mesh, found := get_mesh(renderer, draws[run_start].mesh); found {
-				wgpu.RenderPassEncoderSetVertexBuffer(pass, 0, mesh.position_buffer, 0, wgpu.WHOLE_SIZE)
-				wgpu.RenderPassEncoderSetVertexBuffer(pass, 1, mesh.normal_buffer, 0, wgpu.WHOLE_SIZE)
-				wgpu.RenderPassEncoderSetIndexBuffer(pass, mesh.index_buffer, .Uint32, 0, wgpu.WHOLE_SIZE)
-				wgpu.RenderPassEncoderDrawIndexed(
-					pass,
-					indexCount = mesh.index_count,
-					instanceCount = u32(run_end - run_start),
-					firstIndex = 0,
-					baseVertex = 0,
-					firstInstance = u32(run_start),
-				)
-			}
-			run_start = run_end
+		present_pipeline, present_group := renderer.resample_pipeline, renderer.resample_group
+		if use_fsr {
+			present_pipeline, present_group = renderer.rcas_pipeline, renderer.rcas_group
 		}
-	}
-
-	if scene_visible && renderer.line_pipeline != nil && renderer.line_vertex_count > 0 {
-		line_bytes := u64(renderer.line_vertex_count * size_of(Debug_Vertex))
-		wgpu.RenderPassEncoderSetPipeline(pass, renderer.line_pipeline)
-		wgpu.RenderPassEncoderSetBindGroup(pass, 0, renderer.frame_group)
-		wgpu.RenderPassEncoderSetVertexBuffer(pass, 0, renderer.line_buffer, 0, line_bytes)
-		wgpu.RenderPassEncoderDraw(pass, vertexCount = u32(renderer.line_vertex_count), instanceCount = 1, firstVertex = 0, firstInstance = 0)
-	}
-
-	// The grid is transparent, so it goes last, depth-tested against everything opaque.
-	if scene_visible && renderer.grid_pipeline != nil && settings.show_grid {
-		wgpu.RenderPassEncoderSetPipeline(pass, renderer.grid_pipeline)
-		wgpu.RenderPassEncoderSetBindGroup(pass, 0, renderer.frame_group)
-		wgpu.RenderPassEncoderDraw(pass, vertexCount = 6, instanceCount = 1, firstVertex = 0, firstInstance = 0)
+		if present_pipeline != nil {
+			wgpu.RenderPassEncoderSetPipeline(pass, present_pipeline)
+			wgpu.RenderPassEncoderSetBindGroup(pass, 0, present_group)
+			wgpu.RenderPassEncoderDraw(pass, vertexCount = 3, instanceCount = 1, firstVertex = 0, firstInstance = 0)
+		}
 	}
 
 	// 2D overlay last: one instanced draw per scissor batch, six vertices per quad.
@@ -520,6 +695,11 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 	wgpu.RenderPassEncoderEnd(pass)
 	wgpu.RenderPassEncoderRelease(pass)
 
+	if timing_this_frame {
+		wgpu.CommandEncoderResolveQuerySet(encoder, renderer.timestamp_query_set, 0, 2, renderer.timestamp_resolve_buffer, 0)
+		wgpu.CommandEncoderCopyBufferToBuffer(encoder, renderer.timestamp_resolve_buffer, 0, renderer.timestamp_readbacks[timing_slot].buffer, 0, TIMESTAMP_BYTES)
+	}
+
 	// Frame capture: copy the finished image into a buffer the CPU can read.
 	capture_buffer: wgpu.Buffer
 	capture_bytes_per_row: u32
@@ -543,6 +723,9 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 	defer wgpu.CommandBufferRelease(command_buffer)
 	wgpu.QueueSubmit(renderer.queue, {command_buffer})
 
+	if timing_this_frame {
+		start_timestamp_readback(renderer, timing_slot)
+	}
 	if capture_buffer != nil {
 		captured_pixels = read_capture_buffer(renderer, capture_buffer, capture_bytes_per_row)
 		wgpu.BufferRelease(capture_buffer)
