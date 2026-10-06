@@ -2,7 +2,7 @@
 rem Usage:
 rem   build.bat          build the host (engine.exe) and the game DLL, copy runtime DLLs
 rem   build.bat game     rebuild only the game DLL; a running engine.exe hot-reloads it
-rem   build.bat test     build and run the core tests
+rem   build.bat test     build and run the core and UI tests
 rem   build.bat run      full build, then start the engine
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
@@ -19,6 +19,7 @@ if not exist build mkdir build
 
 if /i "%~1"=="test" (
 	odin test src/core %COMMON_FLAGS% -out:build\core_tests.exe || exit /b 1
+	odin test src/ui %COMMON_FLAGS% -out:build\ui_tests.exe || exit /b 1
 	exit /b 0
 )
 if /i "%~1"=="game" goto build_game

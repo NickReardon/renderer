@@ -51,12 +51,30 @@ main :: proc() {
 	when ODIN_OS == .Darwin {
 		window_flags += {.METAL}
 	}
-	window := sdl.CreateWindow("Renderer", 1600, 900, window_flags)
+	// Size the window in points: 1440 x 860 at 100% scaling, scaled up on high-DPI displays (on
+	// Windows, window coordinates are pixels and the content scale carries the DPI; on macOS
+	// they're points and the content scale is 1), but never more than 85% of the usable screen.
+	DESIRED_WINDOW_POINTS :: [2]f32{1440, 860}
+	primary_display := sdl.GetPrimaryDisplay()
+	content_scale := sdl.GetDisplayContentScale(primary_display)
+	window_size := DESIRED_WINDOW_POINTS * max(content_scale, 1)
+	usable_bounds: sdl.Rect
+	if sdl.GetDisplayUsableBounds(primary_display, &usable_bounds) {
+		window_size.x = min(window_size.x, f32(usable_bounds.w) * 0.85)
+		window_size.y = min(window_size.y, f32(usable_bounds.h) * 0.85)
+	}
+	window := sdl.CreateWindow("Renderer", i32(window_size.x), i32(window_size.y), window_flags)
 	if window == nil {
 		fmt.eprintln("SDL_CreateWindow failed:", sdl.GetError())
 		return
 	}
 	defer sdl.DestroyWindow(window)
+
+	// Deliver typed text (TEXT_INPUT events) for UI text fields. This also enables the OS input
+	// method editor for languages typed through one.
+	if !sdl.StartTextInput(window) {
+		fmt.eprintln("host: SDL_StartTextInput failed:", sdl.GetError())
+	}
 
 	native, native_found := native_window(window)
 	if !native_found {
@@ -81,19 +99,47 @@ main :: proc() {
 	next_version := 1
 	previous_games: [dynamic]Game_API
 
+	// Frame capture for checking rendering from scripts without capturing the desktop. The game
+	// saves the frame to screenshot.bmp, then the host exits.
+	//   --screenshot                 capture 30 frames after start
+	//   --screenshot-after-reload    capture 30 frames after the first hot reload
+	FRAMES_BEFORE_SCREENSHOT :: 30
+	Screenshot_Mode :: enum {
+		None,
+		After_Start,
+		After_Reload,
+	}
+	screenshot_mode := Screenshot_Mode.None
+	for argument in os.args[1:] {
+		switch argument {
+		case "--screenshot":
+			screenshot_mode = .After_Start
+		case "--screenshot-after-reload":
+			screenshot_mode = .After_Reload
+		}
+	}
+	frames_since_trigger := 0
+	screenshot_triggered := screenshot_mode == .After_Start
+
 	input: platform.Input
 	last_tick := time.tick_now()
 
 	main_loop: for {
+		if screenshot_triggered {
+			frames_since_trigger += 1
+		}
+		input.capture_requested = screenshot_triggered && frames_since_trigger == FRAMES_BEFORE_SCREENSHOT
 		// Edges and per-frame deltas only last one frame.
 		for &key in input.keys {
-			key.pressed, key.released = false, false
+			key.pressed, key.released, key.repeated = false, false, false
 		}
 		for &button in input.mouse {
-			button.pressed, button.released = false, false
+			button.pressed, button.released, button.repeated = false, false, false
 		}
 		input.mouse_delta = {}
 		input.wheel = 0
+		input.text_input_length = 0
+		input.display_scale = sdl.GetWindowDisplayScale(window)
 
 		pixel_density := sdl.GetWindowPixelDensity(window)
 		event: sdl.Event
@@ -110,6 +156,9 @@ main :: proc() {
 			break main_loop
 		}
 		free_all(context.temp_allocator)
+		if input.capture_requested {
+			break main_loop
+		}
 
 		// Hot reload: has the build replaced game.dll since we loaded it?
 		modified_time, stat_error := os.modification_time_by_path(game_library_path)
@@ -135,6 +184,9 @@ main :: proc() {
 				append(&previous_games, game)
 				game = new_game
 				game.hot_reloaded(memory)
+			}
+			if screenshot_mode == .After_Reload {
+				screenshot_triggered = true
 			}
 		}
 	}
@@ -230,13 +282,22 @@ handle_event :: proc(input: ^platform.Input, event: sdl.Event, pixel_density: f3
 		input.quit = true
 
 	case .KEY_DOWN, .KEY_UP:
-		if event.key.repeat {
+		key := translate_scancode(event.key.scancode)
+		if key == .None {
 			return
 		}
-		key := translate_scancode(event.key.scancode)
-		if key != .None {
-			set_button(&input.keys[key], event.key.down)
+		if event.key.repeat {
+			input.keys[key].repeated = true
+			return
 		}
+		set_button(&input.keys[key], event.key.down)
+
+	case .TEXT_INPUT:
+		// Append as many whole bytes as fit; text past the per-frame buffer is dropped.
+		typed := string(event.text.text)
+		space_left := len(input.text_input) - input.text_input_length
+		copied_length := copy(input.text_input[input.text_input_length:], typed[:min(len(typed), space_left)])
+		input.text_input_length += copied_length
 
 	case .MOUSE_BUTTON_DOWN, .MOUSE_BUTTON_UP:
 		mouse_button: platform.Mouse_Button
@@ -311,6 +372,10 @@ translate_scancode :: proc(scancode: sdl.Scancode) -> platform.Key {
 		return .Up
 	case .DOWN:
 		return .Down
+	case .HOME:
+		return .Home
+	case .END:
+		return .End
 	case .LSHIFT:
 		return .Left_Shift
 	case .RSHIFT:

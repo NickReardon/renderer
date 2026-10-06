@@ -128,10 +128,12 @@ src/host/      executable: SDL3 window, input, main loop, hot reload; the only p
 src/game/      editor + game; hot-reloaded DLL
 src/core/      math, mesh, geometry operations; imports no engine package, no GPU, no OS
 src/render/    renderer; the only package that touches wgpu
-src/ui/        immediate-mode UI (not created yet)
+src/ui/        immediate-mode UI (our widgets on Clay layout + fontstash text)
+src/third_party/  vendored third-party code, unmodified (Clay)
 ```
 
-- **Imports flow one way:** `game → ui, render, core, platform`; `render → core, platform`;
+- **Imports flow one way:** `game → ui, render, core, platform`; `ui → render, platform`;
+  `render → core, platform`;
   `host → platform`; `core →` nothing in the engine. `host` doesn't import `game`; it loads
   it as a DLL.
 - **No wgpu types outside `render/`. No SDL calls outside `host/`.** These boundaries are what

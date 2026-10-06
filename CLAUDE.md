@@ -13,8 +13,10 @@ Read `docs/STYLE.md` for the full rules and reasoning, `docs/DESIGN.md` for past
 ```
 build.bat          full build: build\engine.exe + build\game.dll, copies SDL3.dll and wgpu_native.dll
 build.bat game     rebuild only game.dll; a running engine hot-reloads it (shaders included)
-build.bat test     run the core tests
+build.bat test     run the core and UI tests
 build.bat run      full build, then start the engine
+build\engine.exe --screenshot                 save frame 30 to build\screenshot.bmp, then exit
+build\engine.exe --screenshot-after-reload    same, 30 frames after the first hot reload
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't
@@ -22,8 +24,13 @@ build.bat run      full build, then start the engine
 - From the Bash tool, run `cmd //c "D:\\Renderer\\build.bat game"`. A relative `build.bat`
   isn't found from there.
 - **Verify a change in the running engine:** start `build\engine.exe` with stdout and stderr
-  redirected to files, rebuild, then read the logs. wgpu validation and shader errors go to
-  stderr. F6 forces a full game restart.
+  redirected to files, rebuild, then read the logs. wgpu validation, shader and Clay errors go
+  to stderr. F6 forces a full game restart.
+- **Look at the result with `--screenshot`,** never by capturing the desktop: the window may be
+  behind others, and a desktop capture can show the owner's other windows. Convert the BMP to
+  PNG (PowerShell `System.Drawing`) and halve it to view it.
+- **UI behaviour is tested in `src/ui/ui_test.odin`** by running real frames with simulated
+  input and finding widgets by the text they show. Extend it when adding or changing widgets.
 - macOS and Linux build scripts don't exist yet.
 
 ## Conventions
@@ -46,7 +53,10 @@ src/platform/  plain shared types (Input, Native_Window); no procedures, importa
 src/host/      executable: SDL3 window, input, main loop, hot reload; only package using SDL
 src/game/      editor + game, hot-reloaded DLL; all persistent state in Game_Memory
 src/render/    renderer; only package using wgpu (render.odin API, device.odin, pipelines.odin, shaders/)
+src/ui/        immediate-mode UI; only package using Clay and fontstash; draws via render's overlay API
 src/core/      math and mesh; imports no engine package, no GPU or OS code; tests in core_test.odin
+src/third_party/clay/  Clay's Odin bindings + prebuilt libs, unmodified (see VERSION.txt)
+assets/fonts/  Inter (UI), JetBrains Mono (numbers), with their OFL licenses; embedded via #load
 ```
 
 The host passes OS window handles (`platform.Native_Window`) to the game, and `render/` builds
@@ -54,7 +64,8 @@ the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of t
 
 ## Hard rules
 
-1. **No wgpu types or calls outside `src/render/`. No SDL calls outside `src/host/`.**
+1. **No wgpu types or calls outside `src/render/`. No SDL calls outside `src/host/`. No Clay
+   or fontstash calls outside `src/ui/`.** Game and editor code use only `ui.*` procedures.
 2. **`src/core/` imports no engine package**, no GPU or OS code. It must stay testable alone.
    `src/platform/` holds only plain data types and may be imported by any package.
 3. **Plain structs and procedures.** No proc fields used as virtual methods, no inheritance
@@ -88,7 +99,7 @@ the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of t
 
 ## How to work
 
-- **Build before saying a change is done,** and run `odin test src/core` when `core/` changed.
+- **Build before saying a change is done,** and run `build.bat test` when `core/` or `ui/` changed.
   Report failures honestly, with the output.
 - **Every new operation in `core/` gets tests first** (exact values or properties such as
   "closed mesh stays closed").
@@ -131,5 +142,22 @@ the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of t
 - **Untyped float constants default to `f64`** when assigned with `:=`. Declare `f32`
   explicitly when the value is mixed with `[3]f32` math.
 - **Appending to `#soa[dynamic]T` needs a typed literal:** `append(&ps, Particle{...})`.
+- **Clay (Odin bindings, commit e6cc369):**
+  - `_ConfigureOpenElement` is private: open with `clay._OpenElementWithId(id)` /
+    `clay._OpenElement()`, configure with the public `clay.ConfigureOpenElement(...)`, close with
+    `clay._CloseElement()`;
+  - container widgets use `@(deferred_none = close_element)` so `if ui.panel(...) { }` closes
+    itself;
+  - **Clay is linked into the game DLL, so a hot reload gets fresh Clay globals.**
+    `ui.on_hot_reload` must call `clay.SetCurrentContext` and re-register the text-measure
+    callback; forgetting this crashes on the first reload;
+  - Clay keeps a process-wide current context, so UI tests must not run in parallel (they're
+    one test procedure);
+  - Clay colors are 0–255 sRGB; text strings must live until `ui.end_frame` (temp allocator is
+    fine).
+- **Odin `fmt` pads widths with zeros** (`%6.2f` printed `013.86`). Don't use widths for
+  alignment.
+- **The PowerShell tool blocks `Remove-Item` with variables in the path.** Use
+  `[System.IO.File]::Delete(path)`.
 - **Odin only ships Windows binaries** for SDL3 and wgpu. macOS and Linux need SDL3 from the
   system package manager and wgpu-native v29.0.1.1 from GitHub.

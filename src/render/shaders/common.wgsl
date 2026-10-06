@@ -7,6 +7,8 @@ struct Frame {
 	gamma_correct:   f32,   // 1 when the surface isn't sRGB and we must encode manually
 	light_direction: vec3f, // direction light travels, normalized
 	padding:         f32,
+	viewport_size:   vec2f, // pixels
+	padding_2:       vec2f,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

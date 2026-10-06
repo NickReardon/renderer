@@ -162,3 +162,86 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
   (pass, material, depth) without changing the loop.
 - **Mesh vertex data is struct-of-arrays on the GPU too:** positions and normals are separate
   vertex buffers.
+
+## UI: our own immediate-mode widgets on Clay's layout
+
+- **Chosen:**
+  - `src/ui/` is our own immediate-mode UI;
+  - **Clay** computes layout (sizing, padding, scrolling, floating elements);
+  - **fontstash** (bundled with Odin) produces glyphs;
+  - widgets, interaction state and text editing are ours;
+  - output goes to the renderer's 2D overlay;
+  - nothing outside `src/ui/` calls Clay or fontstash.
+- **Alternatives:**
+  - microui: bundled and readable, but manual row layout and a plain look;
+  - Dear ImGui: complete (docking, ImGuizmo), but a large C++ dependency we wouldn't understand
+    or own;
+  - Nuklear: no maintained Odin bindings;
+  - ARC: not publicly available;
+  - writing our own layout too: possible later, and the boundary allows it.
+- **Precedents:**
+  - Blender's UI is the closest model: an immediate-mode description each redraw, automatic
+    layout, and state matched by widget identity;
+  - Godot uses retained nodes;
+  - the reference Modeler3D has a 635-line hand-made immediate-mode UI with manual rectangles.
+- **How it works:**
+  - widgets are identified by Clay ids hashed from labels relative to their parent element;
+  - the UI keeps only `active_id` (mouse), `edit_id` (keyboard) and drag state between frames;
+  - hit testing uses the previous frame's layout (inherent to auto-layout immediate mode);
+  - containers are `if` blocks closed by `@(deferred_none)`.
+- **Hot reload:** Clay is statically linked into the game DLL, so each reload gets fresh Clay
+  globals; `ui.on_hot_reload` restores the context and the text-measure callback. Verified with
+  a capture taken after a reload.
+- **Tests:** `src/ui/ui_test.odin` drives real frames with simulated input:
+  - click to edit, type, Enter, Escape;
+  - drag a number field;
+  - toggle a checkbox;
+  - button click, and dragging off a button to cancel;
+  - mouse routing between viewport and panel.
+
+## Text: fontstash + stb_truetype now, kb_text_shape later
+
+- **Chosen:**
+  - fontstash rasterizes glyphs on demand into a single-channel atlas (1024², grows as needed);
+  - fonts are Inter (UI) and JetBrains Mono (numbers), SIL Open Font License, embedded with
+    `#load` and copied to the heap at startup;
+  - the renderer uploads only the atlas region that changed.
+- **Limit:** no shaping. Latin, Greek, Cyrillic and CJK (with a fallback font) work; Arabic,
+  Indic scripts and right-to-left text don't.
+- **Upgrade path:** `vendor:kb_text_shape` (bundled) for segmentation, bidi and shaping, plus our
+  own glyph-ID cache rasterized with stb_truetype. All text goes through `measure_text` and
+  `draw_text` in `ui/text.odin`, so the upgrade stays in one file.
+- **Not yet:** typing non-Latin text through an IME (SDL text editing events aren't forwarded);
+  Clay wraps lines only at spaces.
+
+## Renderer 2D overlay
+
+- **Chosen:** an immediate-mode overlay API in `render/`:
+  - `overlay_rect` (rounded, filled or outlined), `overlay_glyph`, `overlay_set_scissor`,
+    `set_overlay_atlas`;
+  - each quad is one 64-byte instance; one instanced draw per scissor batch;
+  - rounded corners and borders come from a signed distance function in the fragment shader,
+    so they're anti-aliased at any size with no extra geometry;
+  - colors are sRGB as authored and converted to linear in the shader.
+- **Why:** the UI (and later in-game HUDs and gizmo labels) needs only boxes and text; keeping
+  the API to plain quads means the renderer knows nothing about widgets.
+- **3D viewport:** the camera carries a viewport rectangle (the UI's `Viewport` area), so the
+  scene renders beside the panel instead of under it.
+
+## Frame capture for verification
+
+- **Chosen:**
+  - `engine.exe --screenshot` (or `--screenshot-after-reload`) copies the swapchain image to a
+    buffer, maps it, writes `screenshot.bmp` with `core:image/bmp`, and exits;
+  - the surface is configured with `CopySrc` when it supports it.
+- **Why:** capturing the desktop was unreliable (the window may be behind others) and could
+  record unrelated windows. Reading the frame back is exact and needs no new dependency.
+
+## Frame pacing
+
+- **Current:**
+  - presentation is vsync (`PresentMode.Fifo`), so the frame rate follows the display refresh
+    (60 Hz on the development laptop at the time of measuring);
+  - simulation uses the variable frame time.
+- **Planned:** a fixed simulation step with interpolated rendering (*Fix Your Timestep*) in the
+  engine phase; possibly an uncapped present mode (Mailbox or Immediate) toggle for profiling.

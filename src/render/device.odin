@@ -114,6 +114,7 @@ init :: proc(renderer: ^Renderer, window: platform.Native_Window, window_size: [
 			break
 		}
 	}
+	renderer.surface_copyable = .CopySrc in capabilities.usages
 	wgpu.SurfaceCapabilitiesFreeMembers(capabilities)
 	renderer.gamma_correct = renderer.surface_format != .BGRA8UnormSrgb && renderer.surface_format != .RGBA8UnormSrgb
 
@@ -131,6 +132,10 @@ shutdown :: proc(renderer: ^Renderer) {
 		}
 	}
 	release_pipelines(renderer)
+	release_atlas_texture(renderer)
+	if renderer.overlay_sampler != nil do wgpu.SamplerRelease(renderer.overlay_sampler)
+	if renderer.overlay_buffer != nil do wgpu.BufferRelease(renderer.overlay_buffer)
+	if renderer.overlay_layout != nil do wgpu.BindGroupLayoutRelease(renderer.overlay_layout)
 	if renderer.frame_group != nil do wgpu.BindGroupRelease(renderer.frame_group)
 	if renderer.instance_group != nil do wgpu.BindGroupRelease(renderer.instance_group)
 	if renderer.frame_buffer != nil do wgpu.BufferRelease(renderer.frame_buffer)
@@ -157,7 +162,7 @@ configure_surface :: proc(renderer: ^Renderer, size: [2]i32) {
 	wgpu.SurfaceConfigure(renderer.surface, &{
 		device      = renderer.device,
 		format      = renderer.surface_format,
-		usage       = {.RenderAttachment},
+		usage       = {.RenderAttachment, .CopySrc} if renderer.surface_copyable else {.RenderAttachment},
 		width       = u32(size.x),
 		height      = u32(size.y),
 		alphaMode   = .Auto,

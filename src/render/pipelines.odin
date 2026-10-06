@@ -6,8 +6,9 @@
 // are built inside a validation error scope, so a shader with errors is reported and the
 // previous working pipelines stay in use.
 //
-// Bind group 0 (all pipelines):  frame uniforms (camera, light)
-// Bind group 1 (mesh pipeline):  instance records, one per draw
+// Bind group 0 (all pipelines):      frame uniforms (camera, light, viewport size)
+// Bind group 1 (mesh pipeline):      instance records, one per draw
+// Bind group 1 (overlay pipeline):   overlay atlas texture + sampler
 package render
 
 import "base:runtime"
@@ -20,6 +21,7 @@ COMMON_WGSL :: #load("shaders/common.wgsl", string)
 MESH_WGSL   :: #load("shaders/mesh.wgsl", string) + "\n" + COMMON_WGSL
 LINE_WGSL   :: #load("shaders/line.wgsl", string) + "\n" + COMMON_WGSL
 GRID_WGSL   :: #load("shaders/grid.wgsl", string) + "\n" + COMMON_WGSL
+OVERLAY_WGSL :: #load("shaders/overlay.wgsl", string) + "\n" + COMMON_WGSL
 
 // Called after a hot reload: rebuilds pipelines from the newly loaded shader source.
 reload_shaders :: proc(renderer: ^Renderer) {
@@ -57,6 +59,71 @@ create_bindings :: proc(renderer: ^Renderer) {
 
 	instance_group_entry := wgpu.BindGroupEntry{binding = 0, buffer = renderer.instance_buffer, size = instance_buffer_size}
 	renderer.instance_group = wgpu.DeviceCreateBindGroup(renderer.device, &{label = "instances", layout = renderer.instance_layout, entryCount = 1, entries = &instance_group_entry})
+
+	// Overlay: atlas texture + sampler in group 1; quads are per-instance vertex data.
+	overlay_layout_entries := [2]wgpu.BindGroupLayoutEntry{
+		{binding = 0, visibility = {.Fragment}, texture = {sampleType = .Float, viewDimension = ._2D}},
+		{binding = 1, visibility = {.Fragment}, sampler = {type = .Filtering}},
+	}
+	renderer.overlay_layout = wgpu.DeviceCreateBindGroupLayout(renderer.device, &{
+		label      = "overlay",
+		entryCount = len(overlay_layout_entries),
+		entries    = &overlay_layout_entries[0],
+	})
+	renderer.overlay_buffer = wgpu.DeviceCreateBuffer(renderer.device, &{
+		label = "overlay quads",
+		usage = {.Vertex, .CopyDst},
+		size  = u64(MAX_OVERLAY_QUADS * size_of(Overlay_Quad)),
+	})
+	renderer.overlay_sampler = wgpu.DeviceCreateSampler(renderer.device, &{
+		label         = "overlay atlas",
+		addressModeU  = .ClampToEdge,
+		addressModeV  = .ClampToEdge,
+		addressModeW  = .ClampToEdge,
+		magFilter     = .Linear,
+		minFilter     = .Linear,
+		mipmapFilter  = .Nearest,
+		lodMaxClamp   = 32,
+		maxAnisotropy = 1,
+	})
+}
+
+// (Re)creates the overlay atlas texture and the bind group that points at it.
+@(private)
+create_atlas_texture :: proc(renderer: ^Renderer, size: [2]i32) {
+	release_atlas_texture(renderer)
+	renderer.atlas_size = size
+	renderer.atlas_texture = wgpu.DeviceCreateTexture(renderer.device, &{
+		label         = "overlay atlas",
+		usage         = {.TextureBinding, .CopyDst},
+		dimension     = ._2D,
+		size          = {u32(size.x), u32(size.y), 1},
+		format        = .R8Unorm,
+		mipLevelCount = 1,
+		sampleCount   = 1,
+	})
+	renderer.atlas_view = wgpu.TextureCreateView(renderer.atlas_texture, nil)
+	overlay_group_entries := [2]wgpu.BindGroupEntry{
+		{binding = 0, textureView = renderer.atlas_view},
+		{binding = 1, sampler = renderer.overlay_sampler},
+	}
+	renderer.overlay_group = wgpu.DeviceCreateBindGroup(renderer.device, &{
+		label      = "overlay",
+		layout     = renderer.overlay_layout,
+		entryCount = len(overlay_group_entries),
+		entries    = &overlay_group_entries[0],
+	})
+}
+
+@(private)
+release_atlas_texture :: proc(renderer: ^Renderer) {
+	if renderer.overlay_group != nil do wgpu.BindGroupRelease(renderer.overlay_group)
+	if renderer.atlas_view != nil do wgpu.TextureViewRelease(renderer.atlas_view)
+	if renderer.atlas_texture != nil do wgpu.TextureRelease(renderer.atlas_texture)
+	renderer.overlay_group = nil
+	renderer.atlas_view = nil
+	renderer.atlas_texture = nil
+	renderer.atlas_size = {}
 }
 
 // Builds all pipelines. On success they replace the current ones; on failure nothing changes.
@@ -67,9 +134,11 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 	mesh_module := create_shader_module(renderer, "mesh.wgsl", MESH_WGSL)
 	line_module := create_shader_module(renderer, "line.wgsl", LINE_WGSL)
 	grid_module := create_shader_module(renderer, "grid.wgsl", GRID_WGSL)
+	overlay_module := create_shader_module(renderer, "overlay.wgsl", OVERLAY_WGSL)
 	defer wgpu.ShaderModuleRelease(mesh_module)
 	defer wgpu.ShaderModuleRelease(line_module)
 	defer wgpu.ShaderModuleRelease(grid_module)
+	defer wgpu.ShaderModuleRelease(overlay_module)
 
 	frame_only_layout := wgpu.DeviceCreatePipelineLayout(renderer.device, &{
 		label                = "frame only",
@@ -84,6 +153,13 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		bindGroupLayouts     = &mesh_group_layouts[0],
 	})
 	defer wgpu.PipelineLayoutRelease(frame_and_instances_layout)
+	overlay_group_layouts := [2]wgpu.BindGroupLayout{renderer.frame_layout, renderer.overlay_layout}
+	frame_and_overlay_layout := wgpu.DeviceCreatePipelineLayout(renderer.device, &{
+		label                = "frame and overlay atlas",
+		bindGroupLayoutCount = len(overlay_group_layouts),
+		bindGroupLayouts     = &overlay_group_layouts[0],
+	})
+	defer wgpu.PipelineLayoutRelease(frame_and_overlay_layout)
 
 	opaque_target := wgpu.ColorTargetState{format = renderer.surface_format, writeMask = wgpu.ColorWriteMaskFlags_All}
 	alpha_blend := wgpu.BlendState{
@@ -151,10 +227,40 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		fragment     = &wgpu.FragmentState{module = grid_module, entryPoint = "fragment_main", targetCount = 1, targets = &blended_target},
 	})
 
+	// Overlay: one quad per instance, six generated vertices each. No depth test (the render
+	// pass has a depth buffer, so the pipeline must still declare its format).
+	overlay_attributes := [8]wgpu.VertexAttribute{
+		{format = .Float32x2, offset = u64(offset_of(Overlay_Quad, rect_min)), shaderLocation = 0},
+		{format = .Float32x2, offset = u64(offset_of(Overlay_Quad, rect_max)), shaderLocation = 1},
+		{format = .Float32x2, offset = u64(offset_of(Overlay_Quad, uv_min)), shaderLocation = 2},
+		{format = .Float32x2, offset = u64(offset_of(Overlay_Quad, uv_max)), shaderLocation = 3},
+		{format = .Float32x4, offset = u64(offset_of(Overlay_Quad, color)), shaderLocation = 4},
+		{format = .Float32, offset = u64(offset_of(Overlay_Quad, corner_radius)), shaderLocation = 5},
+		{format = .Float32, offset = u64(offset_of(Overlay_Quad, border_width)), shaderLocation = 6},
+		{format = .Uint32, offset = u64(offset_of(Overlay_Quad, mode)), shaderLocation = 7},
+	}
+	overlay_vertex_buffer := wgpu.VertexBufferLayout{
+		stepMode       = .Instance,
+		arrayStride    = size_of(Overlay_Quad),
+		attributeCount = len(overlay_attributes),
+		attributes     = &overlay_attributes[0],
+	}
+	no_depth_test := wgpu.DepthStencilState{format = DEPTH_FORMAT, depthWriteEnabled = .False, depthCompare = .Always}
+	overlay_pipeline := wgpu.DeviceCreateRenderPipeline(renderer.device, &{
+		label        = "overlay",
+		layout       = frame_and_overlay_layout,
+		vertex       = {module = overlay_module, entryPoint = "vertex_main", bufferCount = 1, buffers = &overlay_vertex_buffer},
+		primitive    = {topology = .TriangleList, cullMode = .None},
+		depthStencil = &no_depth_test,
+		multisample  = single_sample,
+		fragment     = &wgpu.FragmentState{module = overlay_module, entryPoint = "fragment_main", targetCount = 1, targets = &blended_target},
+	})
+
 	if !pop_error_scope(renderer) {
 		if mesh_pipeline != nil do wgpu.RenderPipelineRelease(mesh_pipeline)
 		if line_pipeline != nil do wgpu.RenderPipelineRelease(line_pipeline)
 		if grid_pipeline != nil do wgpu.RenderPipelineRelease(grid_pipeline)
+		if overlay_pipeline != nil do wgpu.RenderPipelineRelease(overlay_pipeline)
 		return false
 	}
 
@@ -162,6 +268,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 	renderer.mesh_pipeline = mesh_pipeline
 	renderer.line_pipeline = line_pipeline
 	renderer.grid_pipeline = grid_pipeline
+	renderer.overlay_pipeline = overlay_pipeline
 	return true
 }
 
@@ -170,9 +277,11 @@ release_pipelines :: proc(renderer: ^Renderer) {
 	if renderer.mesh_pipeline != nil do wgpu.RenderPipelineRelease(renderer.mesh_pipeline)
 	if renderer.line_pipeline != nil do wgpu.RenderPipelineRelease(renderer.line_pipeline)
 	if renderer.grid_pipeline != nil do wgpu.RenderPipelineRelease(renderer.grid_pipeline)
+	if renderer.overlay_pipeline != nil do wgpu.RenderPipelineRelease(renderer.overlay_pipeline)
 	renderer.mesh_pipeline = nil
 	renderer.line_pipeline = nil
 	renderer.grid_pipeline = nil
+	renderer.overlay_pipeline = nil
 }
 
 @(private)
