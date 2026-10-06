@@ -74,6 +74,17 @@ ray_box_intersection :: proc(ray: Ray, box_min, box_max: [3]f32) -> (t: f32, hit
 	return t_enter, true
 }
 
+// Where the ray crosses the plane through `plane_point` with normal `plane_normal` (any length,
+// either side). Misses when the ray runs parallel to the plane or points away from it.
+ray_plane_intersection :: proc(ray: Ray, plane_point, plane_normal: [3]f32) -> (t: f32, hit: bool) {
+	approach := linalg.dot(ray.direction, plane_normal)
+	if abs(approach) < 1e-6 * linalg.length(ray.direction) * linalg.length(plane_normal) {
+		return 0, false
+	}
+	t = linalg.dot(plane_point - ray.origin, plane_normal) / approach
+	return t, t >= 0
+}
+
 // Möller–Trumbore ray/triangle test, two-sided. Returns the distance along the ray (t > 0).
 ray_triangle_intersection :: proc(ray: Ray, corner_a, corner_b, corner_c: [3]f32) -> (t: f32, hit: bool) {
 	EPSILON_DETERMINANT :: 1e-12

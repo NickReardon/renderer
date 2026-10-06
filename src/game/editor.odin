@@ -2,6 +2,9 @@
 //
 // Selection is a flag on each entity (`.Selected`) rather than a separate list: the editor's
 // loops already walk the entity pool, and a flag can't go stale when an entity is deleted.
+// The *active* object (Unity's term) is the one selected last; the gizmo sits on it in Pivot
+// mode and takes its axes in Local mode. It's a handle in Editor_State, checked against the
+// selection whenever it's used, so it can't go stale either.
 //
 // Viewport clicks (Unity's rules):
 //   click                select the object under the mouse; clicking empty space clears
@@ -11,7 +14,7 @@
 // it never fights with dragging.
 //
 // Shortcuts (when the 3D view has the keyboard): Delete, Ctrl+D duplicate, F frame selection,
-// Escape clear selection. Ctrl+Z undo and Ctrl+Y / Ctrl+Shift+Z redo work wherever the mouse
+// Escape clear selection, Q W E R tools, Z Pivot/Center, X Global/Local (Unity's keys). Ctrl+Z undo and Ctrl+Y / Ctrl+Shift+Z redo work wherever the mouse
 // is, except while typing in a field or in the middle of a drag.
 package game
 
@@ -31,6 +34,7 @@ Editor_State :: struct {
 	hierarchy_open:       bool,
 	create_section_open:  bool,
 	transform_section_open: bool,
+	active_entity:        Entity_Handle, // selected last; see active_selected_entity
 
 	// Developer flag --pick-center-of=<name>: once the viewport is laid out, click the pixel
 	// where that entity's centre appears, through the normal picking path.
@@ -113,6 +117,8 @@ update_editor :: proc(memory: ^Game_Memory, raw_input, input: ^platform.Input, v
 		if input.keys[.W].pressed do memory.gizmo.tool = .Move
 		if input.keys[.E].pressed do memory.gizmo.tool = .Rotate
 		if input.keys[.R].pressed do memory.gizmo.tool = .Scale
+		if input.keys[.Z].pressed do toggle_handle_position(&memory.gizmo)
+		if input.keys[.X].pressed do memory.gizmo.local_orientation = !memory.gizmo.local_orientation
 	}
 }
 
@@ -136,7 +142,32 @@ click_in_viewport :: proc(memory: ^Game_Memory, pixel: [2]f32, ctrl_held, shift_
 		} else {
 			entity.flags += {.Selected}
 		}
+		if .Selected in entity.flags {
+			memory.editor.active_entity = hit_handle
+		}
 	}
+}
+
+// The active object: the one selected last, if it's still selected; otherwise the first
+// selected one (after Ctrl+D, Delete or undo changed the selection). `found` is false when
+// nothing is selected.
+active_selected_entity :: proc(memory: ^Game_Memory) -> (handle: Entity_Handle, entity: ^Entity, found: bool) {
+	scene := &memory.scene
+	if active, active_found := get_entity(scene, memory.editor.active_entity); active_found && .Selected in active.flags {
+		return memory.editor.active_entity, active, true
+	}
+	count, first := selected_count(scene)
+	if count == 0 {
+		return {}, &scene.entities[0], false
+	}
+	entity, _ = get_entity(scene, first)
+	return first, entity, true
+}
+
+// Selects only this entity and makes it the active one (Create, a plain Hierarchy click).
+select_only_and_activate :: proc(memory: ^Game_Memory, handle: Entity_Handle) {
+	select_only(&memory.scene, handle)
+	memory.editor.active_entity = handle
 }
 
 // --pick-center-of: project the named entity's centre with the same camera the renderer uses,
@@ -250,13 +281,11 @@ duplicate_selection :: proc(scene: ^Scene) {
 	}
 }
 
-// Moves the camera pivot to the selection's centre and backs off until it fits the view.
-// With nothing selected, frames the origin.
-frame_selection :: proc(memory: ^Game_Memory) {
-	scene := &memory.scene
-	bounds_min := [3]f32{max(f32), max(f32), max(f32)}
-	bounds_max := -bounds_min
-	any_selected := false
+// The world-space box around everything selected: each object's mesh bounds (a unit box for
+// objects without a mesh), transformed. `any_selected` is false for an empty selection.
+selection_world_bounds :: proc(scene: ^Scene) -> (bounds_min, bounds_max: [3]f32, any_selected: bool) {
+	bounds_min = {max(f32), max(f32), max(f32)}
+	bounds_max = -bounds_min
 	for slot_index in 1 ..= scene.highest_entity_slot {
 		entity := &scene.entities[slot_index]
 		if !(.Alive in entity.flags) || !(.Selected in entity.flags) {
@@ -281,6 +310,13 @@ frame_selection :: proc(memory: ^Game_Memory) {
 		}
 		any_selected = true
 	}
+	return
+}
+
+// Moves the camera pivot to the selection's centre and backs off until it fits the view.
+// With nothing selected, frames the origin.
+frame_selection :: proc(memory: ^Game_Memory) {
+	bounds_min, bounds_max, any_selected := selection_world_bounds(&memory.scene)
 	if !any_selected {
 		memory.camera.pivot = {0, 0, 0}
 		memory.camera.distance = 7
@@ -342,18 +378,18 @@ draw_hierarchy_panel :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 			spawn_position := memory.camera.pivot
 			if ui.row(user_interface, "first row") {
 				if ui.button(user_interface, "Cube") {
-					select_only(scene, create_primitive_entity(scene, .Cube, spawn_position, {0.8, 0.8, 0.82}))
+					select_only_and_activate(memory, create_primitive_entity(scene, .Cube, spawn_position, {0.8, 0.8, 0.82}))
 				}
 				if ui.button(user_interface, "Sphere") {
-					select_only(scene, create_primitive_entity(scene, .Sphere, spawn_position, {0.8, 0.8, 0.82}))
+					select_only_and_activate(memory, create_primitive_entity(scene, .Sphere, spawn_position, {0.8, 0.8, 0.82}))
 				}
 			}
 			if ui.row(user_interface, "second row") {
 				if ui.button(user_interface, "Cylinder") {
-					select_only(scene, create_primitive_entity(scene, .Cylinder, spawn_position, {0.8, 0.8, 0.82}))
+					select_only_and_activate(memory, create_primitive_entity(scene, .Cylinder, spawn_position, {0.8, 0.8, 0.82}))
 				}
 				if ui.button(user_interface, "Plane") {
-					select_only(scene, create_primitive_entity(scene, .Plane, {spawn_position.x, 0, spawn_position.z}, {0.5, 0.52, 0.55}))
+					select_only_and_activate(memory, create_primitive_entity(scene, .Plane, {spawn_position.x, 0, spawn_position.z}, {0.5, 0.52, 0.55}))
 				}
 			}
 		}
@@ -374,6 +410,9 @@ draw_hierarchy_panel :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 						entity.flags += {.Selected}
 					} else {
 						select_only(scene, entity_handle(scene, slot_index))
+					}
+					if .Selected in entity.flags {
+						memory.editor.active_entity = entity_handle(scene, slot_index)
 					}
 				}
 			}
