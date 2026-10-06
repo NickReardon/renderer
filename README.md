@@ -22,11 +22,13 @@ build.bat test     run the core and UI tests
 | Middle drag | Pan |
 | Alt + right drag, wheel | Zoom |
 | Right drag | Look around; hold it and use WASD to move, Q/E down/up, Shift faster |
-| F | Frame |
 | F6 | Restart the game state |
+| Click / Shift+click / Ctrl+click | Select / add to selection / toggle |
+| Delete, Ctrl+D | Delete, duplicate the selection |
+| F | Frame the selection |
+| Esc | Clear the selection |
 
-The Inspector panel on the right edits the view, camera and scene. Number fields: drag sideways to change, click to type (Enter applies, Escape cancels).
-| Esc | Quit |
+The Hierarchy panel on the left creates objects (cube, sphere, cylinder, plane) and lists the scene; the Inspector on the right edits the selected object, generated from its fields, plus view, camera and rendering settings. Number fields: drag sideways to change, click to type (Enter applies, Escape cancels).
 
 Coordinates are right-handed: X right, Y up, Z toward the viewer.
 

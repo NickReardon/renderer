@@ -24,7 +24,7 @@ import "vendor:wgpu"
 
 MAX_MESHES          :: 1024
 MAX_DRAWS           :: 16 * 1024
-MAX_DEBUG_LINES     :: 16 * 1024
+MAX_DEBUG_LINES     :: 64 * 1024
 MAX_OVERLAY_QUADS   :: 32 * 1024
 MAX_OVERLAY_BATCHES :: 512
 

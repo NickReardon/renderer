@@ -29,13 +29,13 @@ JETBRAINS_MONO_REGULAR_TTF :: #load("../../assets/fonts/JetBrainsMono-Regular.tt
 INITIAL_ATLAS_SIZE :: 1024
 
 // Declares a text element. Sizes are in points.
-text :: proc(state: ^Ui_State, content: string, font: Font = .Regular, size_points: f32 = FONT_SIZE, color: clay.Color = {}) {
+text :: proc(state: ^Ui_State, content: string, font: Font = .Regular, size_points: f32 = FONT_SIZE, color: clay.Color = {}, wrap: clay.TextWrapMode = .None) {
 	text_color := color if color != {} else state.theme.text
 	clay.TextDynamic(content, {
 		fontId    = u16(font),
 		fontSize  = points_u16(state, size_points),
 		textColor = text_color,
-		wrapMode  = .None,
+		wrapMode  = wrap,
 	})
 }
 

@@ -13,6 +13,16 @@ Test_Model :: struct {
 	number:       f32,
 	flag:         bool,
 	button_count: int,
+	vector:       [3]f32,
+	row_clicks:   int,
+	inspected:    Inspected_Data,
+}
+
+// For the reflection-driven inspector: tagged fields get widgets, the untagged one doesn't.
+Inspected_Data :: struct {
+	speed:   f32  `inspect:"Speed" step:"0.5" format:"%.1f"`,
+	enabled: bool `inspect:"Enabled"`,
+	hidden:  f32,
 }
 
 @(private = "file")
@@ -25,6 +35,11 @@ run_frame :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model) 
 		if button(state, "Press me") {
 			model.button_count += 1
 		}
+		vector3_field(state, "Vector", &model.vector, 0.1, "%.1f")
+		if selectable(state, "Row item", false).clicked {
+			model.row_clicks += 1
+		}
+		inspect(state, &model.inspected, Inspected_Data)
 	}
 	return finish_layout(state)
 }
@@ -188,6 +203,48 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	release_mouse(&input)
 	run_frame(state, &input, &model)
 	testing.expect_value(test, model.button_count, 1)
+	free_all(context.temp_allocator)
+
+	// --- A vector field: dragging the Y box changes only Y (20 points * 0.1 = +2).
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	y_box_center, y_box_found := find_text(commands, "Y")
+	testing.expect(test, y_box_found, "the vector field's Y marker should be visible")
+	press_mouse(&input, y_box_center)
+	run_frame(state, &input, &model)
+	move_mouse(&input, y_box_center + {20, 0})
+	run_frame(state, &input, &model)
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	testing.expectf(test, abs(model.vector.y - 2) < 1e-4 && model.vector.x == 0 && model.vector.z == 0, "only Y should change, got %v", model.vector)
+	free_all(context.temp_allocator)
+
+	// --- A selectable row reports clicks.
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	row_center, row_found := find_text(commands, "Row item")
+	testing.expect(test, row_found, "the selectable row should be visible")
+	press_mouse(&input, row_center)
+	run_frame(state, &input, &model)
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	testing.expect_value(test, model.row_clicks, 1)
+	free_all(context.temp_allocator)
+
+	// --- The reflection inspector shows tagged fields, edits the real struct, hides the rest.
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	_, speed_found := find_text(commands, "Speed")
+	_, hidden_found := find_text(commands, "hidden")
+	testing.expect(test, speed_found, "the tagged Speed field should have a widget")
+	testing.expect(test, !hidden_found, "the untagged field should not appear")
+	enabled_center, enabled_found := find_text(commands, "Enabled")
+	testing.expect(test, enabled_found, "the tagged Enabled field should have a checkbox")
+	press_mouse(&input, enabled_center)
+	run_frame(state, &input, &model)
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	testing.expect(test, model.inspected.enabled, "clicking the inspected checkbox should change the real struct")
 	free_all(context.temp_allocator)
 
 	// --- The mouse belongs to the viewport outside the panel, and to the UI over it.

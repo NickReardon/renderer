@@ -14,7 +14,6 @@ import "core:fmt"
 import "core:image"
 import "core:image/bmp"
 import "core:math"
-import "core:math/linalg"
 import "core:strconv"
 import "core:strings"
 import "engine:core"
@@ -27,16 +26,16 @@ Game_Memory :: struct {
 	renderer:              render.Renderer,
 	user_interface:        ui.Ui_State,
 	camera:                Viewport_Camera,
-	cube_mesh:             render.Mesh_Handle,
+	scene:                 Scene,
+	editor:                Editor_State,
 	elapsed_seconds:       f64,
-	animation_seconds:     f64, // advances by rotation_speed, so the cubes can be paused
+	viewport_min:          [2]f32, // the 3D view's rectangle in the last frame's layout (pixels)
+	viewport_max:          [2]f32,
 
 	// Editor settings
 	show_grid:             bool,
-	rotation_speed:        f32,
 	view_section_open:     bool,
 	camera_section_open:   bool,
-	scene_section_open:    bool,
 	rendering_section_open: bool,
 	stats_section_open:    bool,
 	smoothed_frame_seconds: f32,
@@ -82,12 +81,8 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 
 	game_memory.camera = default_viewport_camera()
 	game_memory.show_grid = true
-	game_memory.rotation_speed = 1
-	game_memory.view_section_open = true
-	game_memory.camera_section_open = true
-	game_memory.scene_section_open = true
-	game_memory.rendering_section_open = true
 	game_memory.stats_section_open = true
+	game_memory.editor = {hierarchy_open = true, create_section_open = true, transform_section_open = true}
 	game_memory.render_settings = {
 		dynamic_enabled       = false,
 		fixed_scale_percent   = 100,
@@ -102,11 +97,12 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 	apply_developer_flags(&game_memory.render_settings, arguments)
 	game_memory.render_scale = game_memory.render_settings.fixed_scale_percent / 100
 
-	// Build the cube on the CPU in the engine's mesh format, triangulate it for flat shading,
-	// and upload it. The CPU copies are temporary; only the GPU mesh is kept.
-	cube := core.make_cube(1, context.temp_allocator)
-	positions, normals, indices := core.flat_shaded_triangles(cube, context.temp_allocator)
-	game_memory.cube_mesh = render.create_mesh(&game_memory.renderer, positions, normals, indices)
+	// A starting scene: one of each solid primitive.
+	scene := &game_memory.scene
+	scene_init(scene, &game_memory.renderer)
+	create_primitive_entity(scene, .Cube, {0, 0.5, 0}, {0.8, 0.8, 0.82})
+	create_primitive_entity(scene, .Sphere, {2.2, 0.5, 0}, {0.85, 0.35, 0.2})
+	create_primitive_entity(scene, .Cylinder, {-2.2, 1, 0}, {0.2, 0.55, 0.85})
 	return true
 }
 
@@ -123,6 +119,9 @@ default_viewport_camera :: proc() -> Viewport_Camera {
 // Runs one frame. Returns false when the game wants to quit.
 @(export)
 game_update :: proc(input: ^platform.Input) -> bool {
+	if input.quit {
+		return false
+	}
 	renderer := &game_memory.renderer
 	user_interface := &game_memory.user_interface
 
@@ -130,23 +129,22 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	ui.begin_frame(user_interface, input)
 	draw_editor_ui(game_memory, input)
 
-	// The viewport only gets the mouse and keyboard when the UI isn't using them.
-	if input.quit || (input.keys[.Escape].pressed && !ui.wants_keyboard(user_interface)) {
-		return false
-	}
+	// The 3D view only gets the mouse and keyboard when the UI isn't using them.
+	viewport_has_mouse := !ui.wants_mouse(user_interface)
+	viewport_has_keyboard := !ui.wants_keyboard(user_interface)
 	viewport_input := input^
-	if ui.wants_mouse(user_interface) {
+	if !viewport_has_mouse {
 		viewport_input.mouse = {}
 		viewport_input.mouse_delta = {}
 		viewport_input.wheel = 0
 	}
-	if ui.wants_keyboard(user_interface) {
+	if !viewport_has_keyboard {
 		viewport_input.keys = {}
 	}
+	update_editor(game_memory, &viewport_input, viewport_has_mouse, viewport_has_keyboard)
 	update_viewport_camera(&game_memory.camera, &viewport_input)
 
 	game_memory.elapsed_seconds += f64(input.delta_seconds)
-	game_memory.animation_seconds += f64(input.delta_seconds * game_memory.rotation_speed)
 	// Exponential moving average of frame time, seeded with the first frame so it doesn't creep
 	// up from zero.
 	frame_seconds_blend :: 0.05
@@ -155,42 +153,32 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	}
 	game_memory.smoothed_frame_seconds = math.lerp(game_memory.smoothed_frame_seconds, input.delta_seconds, f32(frame_seconds_blend))
 
-	// Test scene: three cubes using one mesh. The renderer sorts them together and submits them
-	// as a single instanced draw call.
-	seconds := f32(game_memory.animation_seconds)
-	render.draw_mesh(
-		renderer,
-		game_memory.cube_mesh,
-		linalg.matrix4_translate_f32({0, 0.5, 0}),
-		{0.8, 0.8, 0.82, 1},
-	)
-	render.draw_mesh(
-		renderer,
-		game_memory.cube_mesh,
-		linalg.matrix4_translate_f32({2.5, 0.75, 0}) *
-		linalg.matrix4_rotate_f32(seconds, core.WORLD_UP) *
-		linalg.matrix4_scale_f32({1.5, 1.5, 1.5}),
-		{0.85, 0.35, 0.2, 1},
-	)
-	render.draw_mesh(
-		renderer,
-		game_memory.cube_mesh,
-		linalg.matrix4_translate_f32({-2.5, 1, 0}) *
-		linalg.matrix4_rotate_f32(seconds * 0.7, linalg.normalize([3]f32{1, 1, 0})) *
-		linalg.matrix4_scale_f32({0.5, 2, 0.5}),
-		{0.2, 0.55, 0.85, 1},
-	)
+	// Draw every entity with a mesh. Entities sharing a mesh are batched into instanced draws by
+	// the renderer.
+	scene := &game_memory.scene
+	for slot_index in 1 ..= scene.highest_entity_slot {
+		entity := &scene.entities[slot_index]
+		if !(.Alive in entity.flags) || !(.Has_Mesh in entity.flags) {
+			continue
+		}
+		if asset, found := get_mesh_asset(scene, entity.mesh); found {
+			render.draw_mesh(renderer, asset.gpu_mesh, entity_world_matrix(entity), {entity.color.r, entity.color.g, entity.color.b, 1})
+		}
+	}
+	draw_selection_outlines(game_memory, renderer)
 
 	// The grid shows the X (red) and Z (blue) axes; add the vertical Y axis in green.
 	render.debug_line(renderer, {0, 0, 0}, {0, 2, 0}, {0.3, 0.85, 0.3, 1})
 
 	ui.end_frame(user_interface, renderer)
 
-	// The 3D view fills the space the UI layout left for it.
+	// The 3D view fills the space the UI layout left for it. Picking uses this rectangle next
+	// frame, matching what was on screen when the user clicked.
 	viewport_min, viewport_max, viewport_found := ui.area_rect(user_interface, VIEWPORT_AREA)
 	if !viewport_found {
 		viewport_min, viewport_max = {0, 0}, {f32(input.window_size.x), f32(input.window_size.y)}
 	}
+	game_memory.viewport_min, game_memory.viewport_max = viewport_min, viewport_max
 	viewport_size := viewport_max - viewport_min
 	aspect_ratio := viewport_size.x / max(viewport_size.y, 1)
 	eye := viewport_camera_eye(game_memory.camera)
@@ -263,6 +251,7 @@ effective_target_frame_rate :: proc(settings: Render_Settings, input: ^platform.
 //   --upscaler=bilinear  bilinear instead of FSR
 //   --dynamic            dynamic resolution on
 //   --msaa=off           no multisample anti-aliasing
+//   --pick-center-of=Sphere  click the named object's centre once the view is laid out
 apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 	for argument in arguments {
 		if strings.has_prefix(argument, "--render-scale=") {
@@ -280,6 +269,9 @@ apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 			settings.use_fsr = false
 		} else if argument == "--dynamic" {
 			settings.dynamic_enabled = true
+		} else if strings.has_prefix(argument, "--pick-center-of=") {
+			editor := &game_memory.editor
+			editor.developer_pick_name_length = copy(editor.developer_pick_name_bytes[:], argument[len("--pick-center-of="):])
 		}
 	}
 }
@@ -296,14 +288,18 @@ save_screenshot :: proc(path: string, rgba_pixels: []u8, size: [2]i32) {
 	fmt.printfln("game: saved %s (%d x %d)", path, size.x, size.y)
 }
 
-// The editor's panels, declared every frame (immediate mode). Values edited here take effect in
-// this same frame.
+// The editor's panels, declared every frame (immediate mode): Hierarchy on the left, the 3D view
+// in the middle, Inspector on the right (Unity's default layout). Values edited here take
+// effect in this same frame.
 VIEWPORT_AREA :: "Viewport"
 
 draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 	user_interface := &memory.user_interface
+	draw_hierarchy_panel(memory, input)
 	ui.flexible_space(user_interface, VIEWPORT_AREA) // the 3D view's share of the window
-	if ui.panel(user_interface, "Inspector", 300) {
+	if ui.panel(user_interface, "Inspector", 320) {
+		draw_selection_inspector(memory)
+
 		if ui.section(user_interface, "View", &memory.view_section_open) {
 			ui.checkbox(user_interface, "Show grid", &memory.show_grid)
 			field_of_view_degrees := math.to_degrees(memory.camera.vertical_fov)
@@ -322,16 +318,10 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 				memory.camera.pitch = math.to_radians(pitch_degrees)
 			}
 			ui.number_field(user_interface, "Distance", &memory.camera.distance, 0.05, 0.1, 1000, "%.2f")
-			ui.number_field(user_interface, "Pivot X", &memory.camera.pivot.x, 0.02, display_format = "%.2f")
-			ui.number_field(user_interface, "Pivot Y", &memory.camera.pivot.y, 0.02, display_format = "%.2f")
-			ui.number_field(user_interface, "Pivot Z", &memory.camera.pivot.z, 0.02, display_format = "%.2f")
+			ui.vector3_field(user_interface, "Pivot", &memory.camera.pivot, 0.02, "%.2f")
 			if ui.button(user_interface, "Reset camera") {
 				memory.camera = default_viewport_camera()
 			}
-		}
-
-		if ui.section(user_interface, "Scene", &memory.scene_section_open) {
-			ui.number_field(user_interface, "Rotation speed", &memory.rotation_speed, 0.01, -10, 10, "%.2f")
 		}
 
 		if ui.section(user_interface, "Rendering", &memory.rendering_section_open) {
@@ -375,14 +365,21 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 			}
 			ui.label(user_interface, fmt.tprintf("mode    %s", mode_text), .Monospace)
 			ui.label(user_interface, fmt.tprintf("aa      %s", "MSAA 4×" if memory.render_settings.msaa else "off"), .Monospace)
+			object_count := 0
+			for slot_index in 1 ..= memory.scene.highest_entity_slot {
+				if .Alive in memory.scene.entities[slot_index].flags {
+					object_count += 1
+				}
+			}
+			ui.label(user_interface, fmt.tprintf("objects %d", object_count), .Monospace)
 			ui.label(user_interface, fmt.tprintf("window  %d × %d", input.window_size.x, input.window_size.y), .Monospace)
-			ui.label(user_interface, fmt.tprintf("scale   %.2f", input.display_scale), .Monospace)
 		}
 	}
 }
 
 @(export)
 game_shutdown :: proc() {
+	scene_shutdown(&game_memory.scene)
 	ui.shutdown(&game_memory.user_interface)
 	render.shutdown(&game_memory.renderer)
 	free(game_memory)

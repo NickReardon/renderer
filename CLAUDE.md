@@ -23,6 +23,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --dynamic               dynamic resolution on
   --msaa=off              no 4x MSAA
   --target-fps=120        dynamic resolution's target (default: display refresh rate)
+  --pick-center-of=Sphere click the named object's centre (tests picking end to end)
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't
@@ -67,6 +68,8 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
 src/platform/  plain shared types (Input, Native_Window); no procedures, importable by all
 src/host/      executable: SDL3 window, input, main loop, hot reload; only package using SDL
 src/game/      editor + game, hot-reloaded DLL; all persistent state in Game_Memory
+               game.odin (frame, settings, panels), scene.odin (entities, mesh assets),
+               editor.odin (selection, picking, Hierarchy, Inspector, shortcuts), camera.odin
 src/render/    renderer; only package using wgpu (render.odin API, device.odin, pipelines.odin, shaders/)
 src/ui/        immediate-mode UI; only package using Clay and fontstash; draws via render's overlay API
 src/core/      math and mesh; imports no engine package, no GPU or OS code; tests in core_test.odin
@@ -162,7 +165,9 @@ the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of t
     `clay._OpenElement()`, configure with the public `clay.ConfigureOpenElement(...)`, close with
     `clay._CloseElement()`;
   - container widgets use `@(deferred_none = close_element)` so `if ui.panel(...) { }` closes
-    itself;
+    itself. **The close runs at the end of the scope containing the call,** so always put the
+    contents *inside* the `if` block. `if !ui.panel(...) { return }` closes the panel
+    immediately, and its contents end up outside it;
   - **Clay is linked into the game DLL, so a hot reload gets fresh Clay globals.**
     `ui.on_hot_reload` must call `clay.SetCurrentContext` and re-register the text-measure
     callback; forgetting this crashes on the first reload;

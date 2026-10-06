@@ -19,6 +19,7 @@ Theme :: struct {
 	button:           clay.Color,
 	button_hover:     clay.Color,
 	button_pressed:   clay.Color,
+	selection:        clay.Color, // background of selected list rows
 }
 
 DARK_THEME :: Theme{
@@ -35,6 +36,7 @@ DARK_THEME :: Theme{
 	button           = {60, 64, 73, 255},
 	button_hover     = {72, 77, 88, 255},
 	button_pressed   = {48, 51, 58, 255},
+	selection        = {44, 93, 135, 255},
 }
 
 FONT_SIZE          :: 13

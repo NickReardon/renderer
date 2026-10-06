@@ -6,8 +6,7 @@
 //   wheel                  zoom
 //   right drag             look around (flythrough); while held, WASD moves, Q/E go down/up,
 //                          Shift moves faster
-//   F                      frame: move the pivot to the selection (the origin until there is
-//                          a selection)
+//   F                      frame the selection (handled in editor.odin)
 //
 // The camera is stored as a pivot point plus angles and a distance. The eye is derived from
 // those, so orbiting, zooming and flying are each a small change to one or two numbers.
@@ -100,8 +99,4 @@ update_viewport_camera :: proc(camera: ^Viewport_Camera, input: ^platform.Input)
 		camera.distance *= math.pow(ZOOM_PER_WHEEL_STEP, input.wheel)
 	}
 	camera.distance = clamp(camera.distance, 0.1, 1000)
-
-	if input.keys[.F].pressed && !flying {
-		camera.pivot = {0, 0.5, 0} // until there is a selection to frame
-	}
 }

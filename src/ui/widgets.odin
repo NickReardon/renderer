@@ -100,7 +100,7 @@ section :: proc(state: ^Ui_State, label: string, open: ^bool) -> bool {
 }
 
 label :: proc(state: ^Ui_State, content: string, font: Font = .Regular, color: clay.Color = {}) {
-	text(state, content, font, FONT_SIZE, color)
+	text(state, content, font, FONT_SIZE, color, .Words) // wraps at the panel width
 }
 
 button :: proc(state: ^Ui_State, label_text: string) -> (clicked: bool) {
@@ -184,23 +184,66 @@ number_field :: proc(
 	maximum: f32 = max(f32),
 	display_format: string = "%.3f",
 ) -> (changed: bool) {
+	open_field_row(state, label_text)
+	changed = number_box(state, "field", value, drag_speed, minimum, maximum, display_format)
+	clay._CloseElement() // row
+	return
+}
+
+AXIS_LABELS :: [3]string{"X", "Y", "Z"}
+AXIS_COLORS :: [3]clay.Color{{232, 96, 88, 255}, {124, 200, 92, 255}, {84, 140, 236, 255}} // X red, Y green, Z blue
+
+// Three numbers side by side with X, Y, Z markers (positions, rotations, scales).
+vector3_field :: proc(
+	state: ^Ui_State,
+	label_text: string,
+	value: ^[3]f32,
+	drag_speed: f32 = 0.01,
+	display_format: string = "%.2f",
+) -> (changed: bool) {
+	open_field_row(state, label_text)
+	axis_labels := AXIS_LABELS
+	axis_colors := AXIS_COLORS
+	for axis in 0 ..< 3 {
+		if number_box(state, axis_labels[axis], &value[axis], drag_speed, -max(f32), max(f32), display_format, axis_labels[axis], axis_colors[axis]) {
+			changed = true
+		}
+	}
+	clay._CloseElement() // row
+	return
+}
+
+// Opens a row with a label column; the caller adds the value widgets and closes the row.
+@(private)
+open_field_row :: proc(state: ^Ui_State, label_text: string) {
 	clay._OpenElementWithId(clay.ID_LOCAL(label_text))
 	clay.ConfigureOpenElement({
 		layout = {
 			sizing         = {width = clay.SizingGrow(), height = clay.SizingFixed(points(state, ROW_HEIGHT))},
-			childGap       = points_u16(state, 8),
+			childGap       = points_u16(state, 4),
 			childAlignment = {y = .Center},
 		},
 	})
-
-	// Label column
 	clay._OpenElement()
 	clay.ConfigureOpenElement({layout = {sizing = {width = clay.SizingPercent(LABEL_WIDTH_RATIO)}}})
 	text(state, label_text, .Regular, FONT_SIZE, state.theme.text_dim)
 	clay._CloseElement()
+}
 
-	// Value column
-	field_id := clay.ID_LOCAL("field")
+// The value box on its own: drag to change, click to type. `id_text` must be unique within the
+// enclosing element. An optional marker (e.g. "X" in red) is drawn before the number.
+number_box :: proc(
+	state: ^Ui_State,
+	id_text: string,
+	value: ^f32,
+	drag_speed: f32,
+	minimum: f32,
+	maximum: f32,
+	display_format: string,
+	marker: string = "",
+	marker_color: clay.Color = {},
+) -> (changed: bool) {
+	field_id := clay.ID_LOCAL(id_text)
 	interaction := interact(state, field_id)
 	editing := state.edit_id == field_id.id
 	mouse_x := state.input.mouse_position.x
@@ -265,18 +308,60 @@ number_field :: proc(
 	clay.ConfigureOpenElement({
 		layout = {
 			sizing         = {width = clay.SizingGrow(), height = clay.SizingFixed(points(state, ROW_HEIGHT))},
-			padding        = {left = points_u16(state, 8), right = points_u16(state, 8)},
+			padding        = {left = points_u16(state, 6), right = points_u16(state, 6)},
+			childGap       = points_u16(state, 5),
 			childAlignment = {y = .Center},
 		},
 		backgroundColor = background,
 		cornerRadius    = clay.CornerRadiusAll(points(state, CORNER_RADIUS)),
 		border          = {color = state.theme.accent if editing else state.theme.panel_border, width = clay.BorderOutside(points_u16(state, 1))},
 	})
+	if marker != "" {
+		text(state, marker, .Semibold, FONT_SIZE, marker_color)
+	}
 	text(state, displayed_text, .Monospace)
 	clay._CloseElement()
-
-	clay._CloseElement() // row
 	return
+}
+
+// Children laid out left to right, sharing the width. Use as an `if` block.
+@(deferred_none = close_element)
+row :: proc(state: ^Ui_State, id_text: string) -> bool {
+	clay._OpenElementWithId(clay.ID_LOCAL(id_text))
+	clay.ConfigureOpenElement({
+		layout = {
+			sizing         = {width = clay.SizingGrow()},
+			childGap       = points_u16(state, 4),
+			childAlignment = {y = .Center},
+		},
+	})
+	return true
+}
+
+// A list row (e.g. one object in the Hierarchy): highlighted when selected, hovered or pressed.
+// `index` keeps rows with the same label apart. Returns the row's mouse interaction.
+selectable :: proc(state: ^Ui_State, label_text: string, selected: bool, index: u32 = 0, indent_points: f32 = 0) -> Interaction {
+	id := clay.ID_LOCAL(label_text, index)
+	interaction := interact(state, id)
+	background: clay.Color
+	if selected {
+		background = state.theme.selection
+	} else if interaction.hovered {
+		background = state.theme.section_hover
+	}
+	clay._OpenElementWithId(id)
+	clay.ConfigureOpenElement({
+		layout = {
+			sizing         = {width = clay.SizingGrow(), height = clay.SizingFixed(points(state, ROW_HEIGHT - 2))},
+			padding        = {left = points_u16(state, 8 + indent_points), right = points_u16(state, 8)},
+			childAlignment = {y = .Center},
+		},
+		backgroundColor = background,
+		cornerRadius    = clay.CornerRadiusAll(points(state, 3)),
+	})
+	text(state, label_text, .Regular, FONT_SIZE, state.theme.text if selected || interaction.hovered else state.theme.text_dim)
+	clay._CloseElement()
+	return interaction
 }
 
 // Applies this frame's typing to the edit buffer. Only characters that can appear in a number

@@ -324,3 +324,48 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
   dynamic mode climbing to 200% with MSAA on ran without errors.
 - **Also:** in `--screenshot` modes the host now ignores real mouse and keyboard input. A capture
   once came out zoomed because someone scrolled while the window was open.
+
+## Modeler, step 1: scene, picking, selection, Hierarchy, generated Inspector
+
+- **Entities** (`game/scene.odin`), the hybrid fat struct as decided:
+  - a fixed pool of 4096, slot 0 nil, generational handles;
+  - flags `Alive`, `Selected`, `Has_Mesh`;
+  - the transform is Euler degrees applied Z, X, Y (Unity's order);
+  - names are stored inline in a fixed 48-byte buffer (no allocation, hot-reload safe);
+  - `#assert(size_of(Entity) <= ENTITY_SIZE_BUDGET)` (512) holds.
+- **Meshes are shared** (Blender's object/data split): `Mesh_Asset` holds the CPU `core.Mesh`
+  (for picking, outlines and later editing), the GPU handle and local bounds. Primitives exist
+  once and every cube points at the cube asset; the renderer batches them into one instanced
+  draw. Primitive sizes match Unity's.
+- **Selection is a flag on the entity,** not a separate list. The editor already walks the pool,
+  and a flag can't refer to a deleted entity.
+- **Picking:**
+  - the mouse pixel becomes a world ray (`core.ray_from_viewport`) using the viewport rectangle
+    from the last frame's layout, which is what was on screen when the click happened;
+  - each mesh is tested in its own local space: the ray goes through the inverse world matrix,
+    so t values stay comparable across scaled objects. First a bounding-box slab test, then
+    Möller–Trumbore against each face's triangle fan;
+  - a press counts as a click only if the mouse moves under 4 pixels.
+- **Selection outline:** the selected objects' edges, drawn as orange debug lines pulled 0.2%
+  toward the camera so they win the depth test. Unity draws a silhouette outline instead, which
+  needs a post pass (stencil or object-ID buffer); planned later.
+- **Generated Inspector** (`ui/inspector.odin`): `ui.inspect(state, pointer, type)` walks the
+  struct's fields with `core:reflect` and draws a widget for each field tagged `inspect`, with
+  `step`, `min`, `max`, `format` and `hint:"color"` tags. Adding a tagged field to `Entity` makes
+  it editable with no UI code (Godot's ClassDB and Blender's RNA work the same way).
+- **Unity conventions:**
+  - layout: Hierarchy left, 3D view, Inspector right;
+  - click, Shift+click (add) and Ctrl+click (toggle) selection;
+  - Delete, Ctrl+D duplicate (copies become the selection), F frame selection;
+  - new objects are named "Cube", "Cube (1)", …;
+  - Escape clears the selection and **no longer quits** (closing the window does).
+- **Verified:**
+  - `--pick-center-of=Sphere` projects an object's centre with the renderer's matrices and
+    clicks there through the normal path. The capture shows the sphere outlined, selected in
+    the Hierarchy and shown in the Inspector, so picking and rendering agree;
+  - tests for rays, boxes, triangles, meshes through transforms, the new primitives (closed,
+    outward-facing, correct volumes), the vector field, selectable rows and the reflection
+    inspector;
+  - hot reload with a selection in place.
+- **Not yet:** undo, renaming objects (needs a text field), multi-object editing in the
+  Inspector, and an outline silhouette.
