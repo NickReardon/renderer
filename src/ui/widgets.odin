@@ -315,6 +315,9 @@ number_box :: proc(
 		backgroundColor = background,
 		cornerRadius    = clay.CornerRadiusAll(points(state, CORNER_RADIUS)),
 		border          = {color = state.theme.accent if editing else state.theme.panel_border, width = clay.BorderOutside(points_u16(state, 1))},
+		// Clip instead of growing: a long number is cut off inside its box rather than pushing the
+		// row (and the other boxes) past the panel edge.
+		clip            = {horizontal = true},
 	})
 	if marker != "" {
 		text(state, marker, .Semibold, FONT_SIZE, marker_color)

@@ -103,7 +103,35 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 	create_primitive_entity(scene, .Cube, {0, 0.5, 0}, {0.8, 0.8, 0.82})
 	create_primitive_entity(scene, .Sphere, {2.2, 0.5, 0}, {0.85, 0.35, 0.2})
 	create_primitive_entity(scene, .Cylinder, {-2.2, 1, 0}, {0.2, 0.55, 0.85})
+	apply_scene_developer_flags(scene, arguments)
 	return true
+}
+
+// Developer flags that change the starting scene, for checking edge cases with --screenshot:
+//   --mirror=Cube    scale X = -1 (a mirrored transform must still show its outside)
+//   --flatten=Cube   scale Y = 0 (a zero scale must not break normals or picking)
+apply_scene_developer_flags :: proc(scene: ^Scene, arguments: []string) {
+	for argument in arguments {
+		target_name: string
+		mirror := false
+		if strings.has_prefix(argument, "--mirror=") {
+			target_name, mirror = argument[len("--mirror="):], true
+		} else if strings.has_prefix(argument, "--flatten=") {
+			target_name = argument[len("--flatten="):]
+		} else {
+			continue
+		}
+		for slot_index in 1 ..= scene.highest_entity_slot {
+			entity := &scene.entities[slot_index]
+			if .Alive in entity.flags && entity_name(entity) == target_name {
+				if mirror {
+					entity.scale.x = -entity.scale.x
+				} else {
+					entity.scale.y = 0
+				}
+			}
+		}
+	}
 }
 
 default_viewport_camera :: proc() -> Viewport_Camera {

@@ -369,3 +369,38 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
   - hot reload with a selection in place.
 - **Not yet:** undo, renaming objects (needs a text field), multi-object editing in the
   Inspector, and an outline silhouette.
+
+## Review fixes (external review of 2b2380a)
+
+An outside review found eight bugs; all were confirmed in the code and fixed:
+
+1. **A rejected game DLL blocked hot reload.** A library missing exports stayed loaded, which
+   locked its copy, so every retry failed. Now it's unloaded and deleted, the version number
+   moves on, and the same `game.dll` isn't retried until it changes. Verified live: a DLL with no
+   game exports produced one rejection, then a real build reloaded normally.
+2. **Mirrored transforms lost their outside.** Negative scale reverses winding, so back-face
+   culling removed the visible faces. Draws now record `mirrored` (negative
+   `core.linear_determinant`); mirrored draws sort after the rest and use a second mesh
+   pipeline with clockwise front faces.
+3. **Zero scale broke normals and picking.** Normal matrices now come from
+   `core.normal_matrix`, built from cofactors (no division, finite at zero scale, sign-corrected
+   for mirroring); the mesh shader guards zero-length normals; picking skips transforms with a
+   zero determinant.
+4. **FSR read past the rendered region.** EASU now loads its 12 taps per texel, clamped to the
+   rendered sub-rectangle, instead of four gathers clamped by the sampler at the (larger)
+   texture's edge.
+5. **A failed MSAA rebuild left pipelines and targets disagreeing.** The new sample count is
+   kept only if the pipelines rebuild; otherwise the old count stays and the failed request
+   isn't retried until shaders build again.
+6. **Frame Selection cropped objects in narrow viewports.** `core.distance_to_fit_sphere` uses
+   the narrower of the vertical and horizontal fields of view.
+7. **Long numbers pushed vector fields past the panel.** Number boxes clip their text. The fix
+   exposed a second bug: nested clip regions (a scrolling panel holding clipped boxes) reset to
+   the whole window when the inner one ended. `ui.end_frame` now keeps a scissor stack.
+8. **Repeated duplication could produce identical names.** Candidates are now built to fit the
+   48-byte buffer before uniqueness is checked (truncating on UTF-8 boundaries), and an existing
+   " (N)" suffix is replaced rather than nested, as Unity does.
+
+**New tests:** `test_normal_matrix`, `test_distance_to_fit_sphere`, the UI overflow check, and
+`src/game/scene_test.odin` (entity handles, unique names). The game package now has tests;
+`build.bat test` runs core, UI and game. Each new test was confirmed to fail without its fix.

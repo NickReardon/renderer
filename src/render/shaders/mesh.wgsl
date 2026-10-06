@@ -32,7 +32,9 @@ fn vertex_main(
 
 @fragment
 fn fragment_main(fragment: Vertex_Output) -> @location(0) vec4f {
-	let normal = normalize(fragment.normal);
+	// A zero scale can flatten faces to zero-length normals; normalizing those would give NaN.
+	let normal_length_squared = dot(fragment.normal, fragment.normal);
+	let normal = select(vec3f(0.0, 1.0, 0.0), fragment.normal * inverseSqrt(normal_length_squared), normal_length_squared > 1e-12);
 	let diffuse = max(dot(normal, -frame.light_direction), 0.0);
 	// Hemisphere ambient: a cool sky above (+Y), warm ground below, so faces turned away from
 	// the light still show their shape.

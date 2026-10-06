@@ -19,6 +19,7 @@ package ui
 
 import "base:runtime"
 import "core:fmt"
+import "core:math/linalg"
 import fontstash "vendor:fontstash"
 import "engine:platform"
 import "engine:render"
@@ -120,6 +121,12 @@ begin_frame :: proc(state: ^Ui_State, input: ^platform.Input) {
 // Finishes the layout and turns Clay's render commands into renderer overlay quads.
 end_frame :: proc(state: ^Ui_State, renderer: ^render.Renderer) {
 	render_commands := finish_layout(state)
+	Clip_Rect :: struct {
+		minimum, maximum: [2]f32,
+	}
+	scissor_stack: [16]Clip_Rect
+	scissor_depth := 0
+	window_size := [2]f32{f32(state.input.window_size.x), f32(state.input.window_size.y)}
 	for command_index in 0 ..< render_commands.length {
 		command := clay.RenderCommandArray_Get(&render_commands, command_index)
 		box := command.boundingBox
@@ -138,9 +145,23 @@ end_frame :: proc(state: ^Ui_State, renderer: ^render.Renderer) {
 		case .Text:
 			draw_text(state, renderer, command.renderData.text, box)
 		case .ScissorStart:
-			render.overlay_set_scissor(renderer, box_min, box_max)
+			// Clip regions nest (a scrolling panel holding clipped fields): each one is the
+			// intersection with its parent, and ending it restores the parent.
+			parent := scissor_stack[min(scissor_depth, len(scissor_stack)) - 1] if scissor_depth > 0 else Clip_Rect{{0, 0}, window_size}
+			clipped := Clip_Rect{linalg.max(parent.minimum, box_min), linalg.min(parent.maximum, box_max)}
+			if scissor_depth < len(scissor_stack) {
+				scissor_stack[scissor_depth] = clipped
+			}
+			scissor_depth += 1
+			render.overlay_set_scissor(renderer, clipped.minimum, clipped.maximum)
 		case .ScissorEnd:
-			render.overlay_clear_scissor(renderer)
+			scissor_depth = max(scissor_depth - 1, 0)
+			if scissor_depth > 0 {
+				parent := scissor_stack[min(scissor_depth, len(scissor_stack)) - 1]
+				render.overlay_set_scissor(renderer, parent.minimum, parent.maximum)
+			} else {
+				render.overlay_clear_scissor(renderer)
+			}
 		case .None, .Image, .Custom, .OverlayColorStart, .OverlayColorEnd:
 			// Not used yet.
 		}

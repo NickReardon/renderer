@@ -15,6 +15,7 @@ package game
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
+import "core:strings"
 import "engine:core"
 import "engine:render"
 
@@ -182,7 +183,7 @@ entity_name :: proc(entity: ^Entity) -> string {
 }
 
 set_entity_name :: proc(entity: ^Entity, name: string) {
-	entity.name_length = u8(copy(entity.name_bytes[:], name))
+	entity.name_length = u8(copy(entity.name_bytes[:], truncate_utf8(name, ENTITY_NAME_BYTES)))
 }
 
 // World matrix: scale, then rotate (Z, X, Y), then translate.
@@ -196,7 +197,11 @@ entity_world_matrix :: proc(entity: ^Entity) -> matrix[4, 4]f32 {
 }
 
 // A name not used by any other entity: "Cube", then "Cube (1)", "Cube (2)", ... as in Unity.
-unique_entity_name :: proc(scene: ^Scene, base_name: string) -> string {
+// An existing " (N)" suffix is dropped first, so duplicating "Cube (3)" gives "Cube (4)", not
+// "Cube (3) (1)". Every candidate is built to fit the 48-byte name buffer (the base is shortened
+// to leave room for the suffix), so uniqueness is checked on the name exactly as it will be
+// stored.
+unique_entity_name :: proc(scene: ^Scene, requested_name: string) -> string {
 	name_in_use :: proc(scene: ^Scene, name: string) -> bool {
 		for slot_index in 1 ..= scene.highest_entity_slot {
 			entity := &scene.entities[slot_index]
@@ -206,15 +211,47 @@ unique_entity_name :: proc(scene: ^Scene, base_name: string) -> string {
 		}
 		return false
 	}
-	if !name_in_use(scene, base_name) {
-		return base_name
-	}
-	for number := 1; ; number += 1 {
-		candidate := fmt.tprintf("%s (%d)", base_name, number)
+	base_name := strip_number_suffix(requested_name)
+	for number := 0; ; number += 1 {
+		suffix := fmt.tprintf(" (%d)", number) if number > 0 else ""
+		candidate := fmt.tprintf("%s%s", truncate_utf8(base_name, ENTITY_NAME_BYTES - len(suffix)), suffix)
 		if !name_in_use(scene, candidate) {
 			return candidate
 		}
 	}
+}
+
+// "Cube (12)" -> "Cube"; anything else is returned unchanged.
+strip_number_suffix :: proc(name: string) -> string {
+	if !strings.has_suffix(name, ")") {
+		return name
+	}
+	opening := strings.last_index(name, " (")
+	if opening < 0 {
+		return name
+	}
+	digits := name[opening + 2:len(name) - 1]
+	if len(digits) == 0 {
+		return name
+	}
+	for character in digits {
+		if character < '0' || character > '9' {
+			return name
+		}
+	}
+	return name[:opening]
+}
+
+// The longest prefix of `text` that fits in `maximum_bytes` without splitting a UTF-8 character.
+truncate_utf8 :: proc(text: string, maximum_bytes: int) -> string {
+	if len(text) <= maximum_bytes {
+		return text
+	}
+	end := max(maximum_bytes, 0)
+	for end > 0 && (text[end] & 0xC0) == 0x80 { // continuation byte: step back to a character start
+		end -= 1
+	}
+	return text[:end]
 }
 
 create_primitive_entity :: proc(scene: ^Scene, kind: Primitive_Kind, position: [3]f32, color: [3]f32) -> Entity_Handle {

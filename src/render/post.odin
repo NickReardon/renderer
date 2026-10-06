@@ -22,19 +22,14 @@ TIMESTAMP_BYTES            :: 2 * size_of(u64)
 POST_WGSL    :: #load("shaders/post.wgsl", string)
 RESOLVE_WGSL :: #load("shaders/resolve.wgsl", string)
 
-// Constants for FSR EASU (FsrEasuCon in ffx_fsr1.h): map an output pixel to input texels.
-// render_size: pixels actually rendered; texture_size: size of the texture holding them;
-// output_size: viewport size the image is scaled to.
-easu_constants :: proc(render_size, texture_size, output_size: [2]f32) -> (constants: [4][4]f32) {
+// Constants for FSR EASU (con0 of FsrEasuCon in ffx_fsr1.h): map an output pixel to the input
+// texel position it samples, at pixel centres. render_size: pixels actually rendered;
+// output_size: viewport size the image is scaled to. AMD's con1..con3 hold texture coordinates
+// for four gathers; our port loads each tap as a texel clamped to the rendered region instead
+// (see post.wgsl), so those stay zero.
+easu_constants :: proc(render_size, output_size: [2]f32) -> (constants: [4][4]f32) {
 	input_per_output := render_size / output_size
-	texel := 1 / texture_size
-	// Output pixel to input pixel position (FSR samples at pixel centres).
 	constants[0] = {input_per_output.x, input_per_output.y, 0.5 * input_per_output.x - 0.5, 0.5 * input_per_output.y - 0.5}
-	// Input pixel position to the texture coordinate of the first gather, and its offset.
-	constants[1] = {texel.x, texel.y, 1 * texel.x, -1 * texel.y}
-	// The other three gathers, relative to the first.
-	constants[2] = {-1 * texel.x, 2 * texel.y, 1 * texel.x, 2 * texel.y}
-	constants[3] = {0 * texel.x, 4 * texel.y, 0, 0}
 	return
 }
 

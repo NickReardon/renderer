@@ -141,6 +141,55 @@ test_dynamic_resolution :: proc(test: ^testing.T) {
 }
 
 @(test)
+test_normal_matrix :: proc(test: ^testing.T) {
+	transform_normal :: proc(transform: matrix[4, 4]f32, normal: [3]f32) -> [3]f32 {
+		transformed := normal_matrix(transform) * [4]f32{normal.x, normal.y, normal.z, 0}
+		return linalg.normalize0(transformed.xyz)
+	}
+
+	// Matches the inverse transpose for an ordinary transform (non-uniform scale and rotation).
+	ordinary := linalg.matrix4_rotate_f32(0.7, linalg.normalize([3]f32{1, 2, 3})) * linalg.matrix4_scale_f32({2, 0.5, 3})
+	from_inverse := linalg.transpose(linalg.inverse(ordinary)) * [4]f32{0.3, 0.8, -0.5, 0}
+	expected := linalg.normalize(from_inverse.xyz)
+	testing.expect(test, linalg.length(transform_normal(ordinary, {0.3, 0.8, -0.5}) - expected) < 1e-5, "should match the inverse transpose")
+
+	// Mirrored (scale x = -1): the +X face ends up at -X, and its normal must point -X (outward).
+	mirrored := linalg.matrix4_scale_f32({-1, 1, 1})
+	testing.expect(test, linear_determinant(mirrored) < 0, "a negative scale mirrors")
+	testing.expect(test, linalg.length(transform_normal(mirrored, {1, 0, 0}) - [3]f32{-1, 0, 0}) < EPSILON, "mirrored normal should point outward")
+
+	// Zero scale: no inverse exists, but the normal matrix stays finite.
+	flattened := linalg.matrix4_scale_f32({1, 0, 1})
+	testing.expect_value(test, linear_determinant(flattened), 0)
+	flattened_normal := normal_matrix(flattened)
+	for row in 0 ..< 4 {
+		for column in 0 ..< 4 {
+			testing.expect(test, !math.is_nan(flattened_normal[row, column]) && !math.is_inf(flattened_normal[row, column]), "normal matrix must be finite at zero scale")
+		}
+	}
+	// The top face survives flattening and still points up.
+	testing.expect(test, linalg.length(transform_normal(flattened, {0, 1, 0}) - [3]f32{0, 1, 0}) < EPSILON, "top face normal should stay up")
+}
+
+@(test)
+test_distance_to_fit_sphere :: proc(test: ^testing.T) {
+	vertical_fov := math.to_radians(f32(50))
+	// A wide viewport is limited by the vertical angle.
+	wide := distance_to_fit_sphere(5, vertical_fov, 2)
+	testing.expect(test, abs(wide - 5 / math.sin(vertical_fov * 0.5)) < 1e-4, "wide viewport: vertical field of view limits")
+
+	// A tall, narrow viewport (440 x 860) is limited horizontally, so it needs more distance.
+	narrow := distance_to_fit_sphere(5, vertical_fov, 440.0 / 860.0)
+	testing.expect(test, narrow > wide, "narrow viewport must back off further")
+
+	// At that distance the sphere's sides really are inside the horizontal view: the angle from the
+	// view axis to the sphere's edge is at most half the horizontal field of view.
+	horizontal_fov := 2 * math.atan(math.tan(vertical_fov * 0.5) * (440.0 / 860.0))
+	edge_angle := math.asin(5 / narrow)
+	testing.expect(test, edge_angle <= horizontal_fov * 0.5 + 1e-5, "sphere must fit horizontally")
+}
+
+@(test)
 test_perspective_reverse_z :: proc(test: ^testing.T) {
 	near: f32 = 0.1
 	projection := perspective_reverse_z(math.to_radians(f32(60)), 16.0 / 9.0, near)

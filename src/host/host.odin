@@ -88,7 +88,7 @@ main :: proc() {
 	executable_directory := string(sdl.GetBasePath())
 	game_library_path := fmt.aprintf("%sgame.%s", executable_directory, dynlib.LIBRARY_FILE_EXTENSION)
 
-	game, game_loaded := load_game_api(executable_directory, game_library_path, 0)
+	game, game_loaded, _ := load_game_api(executable_directory, game_library_path, 0)
 	if !game_loaded {
 		return
 	}
@@ -99,6 +99,7 @@ main :: proc() {
 		return
 	}
 	next_version := 1
+	rejected_modified_time: time.Time // a game.dll that failed to load; skipped until it changes
 	previous_games: [dynamic]Game_API
 
 	// Frame capture for checking rendering from scripts without capturing the desktop. The game
@@ -184,9 +185,14 @@ main :: proc() {
 		// Hot reload: has the build replaced game.dll since we loaded it?
 		modified_time, stat_error := os.modification_time_by_path(game_library_path)
 		force_restart := input.keys[.F6].pressed
-		if (stat_error == nil && modified_time != game.modified_time) || force_restart {
-			new_game, new_game_loaded := load_game_api(executable_directory, game_library_path, next_version)
+		changed_since_load := stat_error == nil && modified_time != game.modified_time && modified_time != rejected_modified_time
+		if changed_since_load || force_restart {
+			new_game, new_game_loaded, new_game_rejected := load_game_api(executable_directory, game_library_path, next_version)
 			if !new_game_loaded {
+				if new_game_rejected {
+					rejected_modified_time = modified_time
+					next_version += 1 // never reuse a name that might still be locked
+				}
 				continue
 			}
 			next_version += 1
@@ -221,7 +227,9 @@ main :: proc() {
 
 // Copies game.dll to game_<version>.dll and loads the copy. Loading a copy leaves game.dll
 // itself unlocked, so the next build can replace it while this one is running.
-load_game_api :: proc(executable_directory, game_library_path: string, version: int) -> (api: Game_API, loaded: bool) {
+// `rejected` means the file was read but isn't a usable game library (missing exports): don't
+// retry it until it changes. Other failures (e.g. the build still writing) are worth retrying.
+load_game_api :: proc(executable_directory, game_library_path: string, version: int) -> (api: Game_API, loaded: bool, rejected: bool) {
 	modified_time, stat_error := os.modification_time_by_path(game_library_path)
 	if stat_error != nil {
 		fmt.eprintfln("host: can't find %s: %v", game_library_path, stat_error)
@@ -242,12 +250,18 @@ load_game_api :: proc(executable_directory, game_library_path: string, version: 
 			GAME_API_PROCEDURE_COUNT,
 			dynlib.last_error(),
 		)
-		return
+		// Unload the rejected library and delete its copy: a loaded DLL keeps its file locked,
+		// which would make every later attempt to copy to this name fail.
+		if api.__handle != nil {
+			dynlib.unload_library(api.__handle)
+		}
+		os.remove(copy_path)
+		return {}, false, true
 	}
 	api.modified_time = modified_time
 	api.version = version
 	fmt.printfln("host: loaded game version %d", version)
-	return api, true
+	return api, true, false
 }
 
 unload_game_api :: proc(executable_directory: string, api: Game_API) {

@@ -247,6 +247,39 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	testing.expect(test, model.inspected.enabled, "clicking the inspected checkbox should change the real struct")
 	free_all(context.temp_allocator)
 
+	// --- Long numbers must stay inside their boxes instead of pushing the row past the window.
+	saved_vector := model.vector
+	model.vector = {-123456.7, -123456.7, -123456.7}
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	// What's *visible* must stay inside the window: an element's right edge, cut by any clip
+	// regions around it (Clay emits nested ScissorStart / ScissorEnd pairs).
+	window_width := f32(input.window_size.x)
+	clip_right_stack: [16]f32
+	clip_depth := 0
+	for command_index in 0 ..< commands.length {
+		command := clay.RenderCommandArray_Get(&commands, command_index)
+		right_edge := command.boundingBox.x + command.boundingBox.width
+		current_clip := clip_right_stack[clip_depth - 1] if clip_depth > 0 else window_width
+		#partial switch command.commandType {
+		case .ScissorStart:
+			clip_right_stack[clip_depth] = min(current_clip, right_edge)
+			clip_depth += 1
+		case .ScissorEnd:
+			clip_depth -= 1
+		case:
+			visible_right_edge := min(right_edge, current_clip)
+			if visible_right_edge > window_width + 0.5 {
+				testing.expectf(test, false, "%v element is visible up to x = %v, past the window's right edge (%v)", command.commandType, visible_right_edge, window_width)
+			}
+		}
+	}
+	// Every box must also stay inside the panel: the Z field's box ends at or before the window edge.
+	z_marker_center, z_marker_found := find_text(commands, "Z")
+	testing.expect(test, z_marker_found && z_marker_center.x < window_width, "the Z field should be inside the window")
+	model.vector = saved_vector
+	free_all(context.temp_allocator)
+
 	// --- The mouse belongs to the viewport outside the panel, and to the UI over it.
 	move_mouse(&input, {100, 400})
 	run_frame(state, &input, &model)

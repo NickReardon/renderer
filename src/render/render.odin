@@ -21,6 +21,7 @@ import "core:math"
 import "core:math/linalg"
 import "core:slice"
 import "vendor:wgpu"
+import "engine:core"
 
 MAX_MESHES          :: 1024
 MAX_DRAWS           :: 16 * 1024
@@ -68,6 +69,7 @@ Draw :: struct {
 	mesh:     Mesh_Handle,
 	world:    matrix[4, 4]f32,
 	color:    [4]f32, // linear
+	mirrored: bool,   // negative determinant: triangles wind the other way
 }
 
 Debug_Vertex :: struct {
@@ -198,6 +200,7 @@ Renderer :: struct {
 	// averaged into scene_color by the resolve pass. Allocated only while MSAA is on, grown as
 	// the render size needs, and released when the window resizes or MSAA changes.
 	msaa_sample_count:        u32, // 1 = off
+	msaa_rejected_sample_count: u32, // a count whose pipeline rebuild failed; 0 = none
 	msaa_target_size:         [2]i32,
 	msaa_color_texture:       wgpu.Texture,
 	msaa_color_view:          wgpu.TextureView,
@@ -224,6 +227,7 @@ Renderer :: struct {
 	frame_group:       wgpu.BindGroup,
 	instance_group:    wgpu.BindGroup,
 	mesh_pipeline:     wgpu.RenderPipeline,
+	mesh_mirrored_pipeline: wgpu.RenderPipeline, // same, with clockwise front faces
 	line_pipeline:     wgpu.RenderPipeline,
 	grid_pipeline:     wgpu.RenderPipeline,
 	overlay_pipeline:  wgpu.RenderPipeline,
@@ -317,10 +321,12 @@ draw_mesh :: proc(renderer: ^Renderer, mesh: Mesh_Handle, world: matrix[4, 4]f32
 	if renderer.draw_count >= MAX_DRAWS {
 		return // release builds (asserts disabled): drop the draw
 	}
-	// Sort key: mesh slot in the high 32 bits groups draws of the same mesh; submission order in
+	// Sort key: mirrored draws (bit 63) after the rest, so each group needs one pipeline change;
+	// mesh slot in the next 31 bits groups draws of the same mesh; submission order in
 	// the low bits keeps the order deterministic. Later, pass and material get bits here too.
-	sort_key := u64(mesh.index) << 32 | u64(renderer.draw_count)
-	renderer.draws[renderer.draw_count] = {sort_key = sort_key, mesh = mesh, world = world, color = color}
+	mirrored := core.linear_determinant(world) < 0
+	sort_key := (u64(1) << 63 if mirrored else 0) | u64(mesh.index) << 32 | u64(renderer.draw_count)
+	renderer.draws[renderer.draw_count] = {sort_key = sort_key, mesh = mesh, world = world, color = color, mirrored = mirrored}
 	renderer.draw_count += 1
 }
 
@@ -483,7 +489,7 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		for draw, draw_index in draws {
 			instances[draw_index] = {
 				world         = draw.world,
-				normal_matrix = linalg.transpose(linalg.inverse(draw.world)),
+				normal_matrix = core.normal_matrix(draw.world), // finite even for zero scale
 				color         = draw.color,
 			}
 		}
@@ -523,12 +529,19 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 
 	// MSAA: changing the sample count rebuilds the scene pipelines (their sample count is part of
 	// the pipeline) and drops the old multisampled targets.
+	// The new count is only kept if the rebuild succeeds; otherwise the old pipelines stay and so
+	// must the old count, or pipelines and targets would disagree about sample counts. A request
+	// that failed isn't retried every frame; it's retried after the next successful shader build.
 	msaa_samples: u32 = 4 if settings.msaa_samples == 4 else 1
-	if msaa_samples != renderer.msaa_sample_count {
-		renderer.msaa_sample_count = msaa_samples
-		release_msaa_targets(renderer)
-		if !create_pipelines(renderer) {
-			fmt.eprintln("render: rebuilding pipelines for the new MSAA setting failed")
+	if msaa_samples != renderer.msaa_sample_count && msaa_samples != renderer.msaa_rejected_sample_count {
+		previous_samples := renderer.msaa_sample_count
+		renderer.msaa_sample_count = msaa_samples // create_pipelines reads it
+		if create_pipelines(renderer) {
+			release_msaa_targets(renderer) // recreated below at the new sample count
+		} else {
+			renderer.msaa_sample_count = previous_samples
+			renderer.msaa_rejected_sample_count = msaa_samples
+			fmt.eprintfln("render: rebuilding pipelines for %dx MSAA failed; staying at %dx", msaa_samples, previous_samples)
 		}
 	}
 	use_msaa := renderer.msaa_sample_count > 1 && scene_visible && renderer.resolve_pipeline != nil
@@ -539,7 +552,7 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 	scene_target_size := [2]f32{f32(renderer.scene_target_size.x), f32(renderer.scene_target_size.y)}
 	render_size_float := [2]f32{f32(render_size.x), f32(render_size.y)}
 	post_uniforms := Post_Uniforms{
-		easu_constants  = easu_constants(render_size_float, scene_target_size, viewport_size),
+		easu_constants  = easu_constants(render_size_float, viewport_size),
 		output_offset   = viewport_min,
 		output_size     = viewport_size,
 		source_uv_scale = render_size_float / scene_target_size,
@@ -596,17 +609,23 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		wgpu.RenderPassEncoderSetViewport(scene_pass, 0, 0, render_size_float.x, render_size_float.y, 0, 1)
 		wgpu.RenderPassEncoderSetScissorRect(scene_pass, 0, 0, u32(render_size.x), u32(render_size.y))
 
-		if renderer.mesh_pipeline != nil && len(draws) > 0 {
-			wgpu.RenderPassEncoderSetPipeline(scene_pass, renderer.mesh_pipeline)
+		if renderer.mesh_pipeline != nil && renderer.mesh_mirrored_pipeline != nil && len(draws) > 0 {
 			wgpu.RenderPassEncoderSetBindGroup(scene_pass, 0, renderer.frame_group)
 			wgpu.RenderPassEncoderSetBindGroup(scene_pass, 1, renderer.instance_group)
+			pipeline_is_mirrored: Maybe(bool) // which mesh pipeline is bound; none yet
 			for run_start := 0; run_start < len(draws); {
-				// A run of draws using the same mesh becomes one instanced draw. Instance i of the
-				// run reads instance record run_start + i, because instance_index counts from
-				// firstInstance.
+				// A run of draws using the same mesh (and the same winding) becomes one instanced
+				// draw. Instance i of the run reads instance record run_start + i, because
+				// instance_index counts from firstInstance.
 				run_end := run_start + 1
-				for run_end < len(draws) && draws[run_end].mesh == draws[run_start].mesh {
+				for run_end < len(draws) && draws[run_end].mesh == draws[run_start].mesh && draws[run_end].mirrored == draws[run_start].mirrored {
 					run_end += 1
+				}
+				// Mirrored transforms flip triangle winding, so they use a pipeline whose front faces
+				// are clockwise; otherwise back-face culling would remove their outside.
+				if mirrored := draws[run_start].mirrored; pipeline_is_mirrored != mirrored {
+					wgpu.RenderPassEncoderSetPipeline(scene_pass, renderer.mesh_mirrored_pipeline if mirrored else renderer.mesh_pipeline)
+					pipeline_is_mirrored = mirrored
 				}
 				if mesh, found := get_mesh(renderer, draws[run_start].mesh); found {
 					wgpu.RenderPassEncoderSetVertexBuffer(scene_pass, 0, mesh.position_buffer, 0, wgpu.WHOLE_SIZE)

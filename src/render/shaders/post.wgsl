@@ -33,7 +33,8 @@
 
 // Must match `Post_Uniforms` in render.odin.
 struct Post_Uniforms {
-	easu_constants_0: vec4f, // FsrEasuCon con0..con3, as floats
+	easu_constants_0: vec4f, // FsrEasuCon con0, as floats: output pixel -> input texel position
+	// con1..con3 (gather positions) are unused: the taps are loaded per texel instead
 	easu_constants_1: vec4f,
 	easu_constants_2: vec4f,
 	easu_constants_3: vec4f,
@@ -146,48 +147,55 @@ fn easu_direction_and_length(weight: f32, luma_a: f32, luma_b: f32, luma_c: f32,
 	return vec3f(direction_x * weight, direction_y * weight, (length_x + length_y) * weight);
 }
 
+// One input texel, clamped to the region that was actually rendered this frame. (The texture is
+// larger than that region under dynamic resolution, so the sampler's clamp-to-edge isn't
+// enough: it would clamp to the texture's edge and read stale pixels.)
+fn load_rendered_texel(texel: vec2i, last_rendered_texel: vec2i) -> vec3f {
+	return textureLoad(source_texture, clamp(texel, vec2i(0), last_rendered_texel), 0).rgb;
+}
+
+// Approximate luma (times 2): blue/2 + red/2 + green.
+fn easu_luma(color: vec3f) -> f32 {
+	return color.b * 0.5 + (color.r * 0.5 + color.g);
+}
+
 fn fsr_easu(output_pixel: vec2f) -> vec3f {
 	// Position of 'f' (the input texel up and left of this output pixel) and the fraction past it.
 	var position = output_pixel * post.easu_constants_0.xy + post.easu_constants_0.zw;
 	let base_texel = floor(position);
 	position -= base_texel;
 
-	// Four gathers cover the 12 taps. Gather returns (x, y, z, w) = (bottom-left, bottom-right,
-	// top-right, top-left) of the 2x2 texels around the coordinate.
-	let gather_bc = base_texel * post.easu_constants_1.xy + post.easu_constants_1.zw;
-	let gather_ijfe = gather_bc + post.easu_constants_2.xy;
-	let gather_klhg = gather_bc + post.easu_constants_2.zw;
-	let gather_on = gather_bc + post.easu_constants_3.xy;
-	let red_bc = textureGather(0, source_texture, source_sampler, gather_bc);
-	let green_bc = textureGather(1, source_texture, source_sampler, gather_bc);
-	let blue_bc = textureGather(2, source_texture, source_sampler, gather_bc);
-	let red_ijfe = textureGather(0, source_texture, source_sampler, gather_ijfe);
-	let green_ijfe = textureGather(1, source_texture, source_sampler, gather_ijfe);
-	let blue_ijfe = textureGather(2, source_texture, source_sampler, gather_ijfe);
-	let red_klhg = textureGather(0, source_texture, source_sampler, gather_klhg);
-	let green_klhg = textureGather(1, source_texture, source_sampler, gather_klhg);
-	let blue_klhg = textureGather(2, source_texture, source_sampler, gather_klhg);
-	let red_on = textureGather(0, source_texture, source_sampler, gather_on);
-	let green_on = textureGather(1, source_texture, source_sampler, gather_on);
-	let blue_on = textureGather(2, source_texture, source_sampler, gather_on);
+	// The 12 taps. AMD's version fetches them with four textureGather calls and relies on the
+	// sampler clamping at the image edge; here each texel is loaded and clamped to the rendered
+	// region instead, which matches that behaviour when the image is a sub-rectangle.
+	let rendered_size = vec2i(round(post.source_uv_scale * vec2f(textureDimensions(source_texture))));
+	let last_texel = rendered_size - vec2i(1);
+	let texel_f = vec2i(base_texel);
+	let color_b = load_rendered_texel(texel_f + vec2i(0, -1), last_texel);
+	let color_c = load_rendered_texel(texel_f + vec2i(1, -1), last_texel);
+	let color_e = load_rendered_texel(texel_f + vec2i(-1, 0), last_texel);
+	let color_f = load_rendered_texel(texel_f, last_texel);
+	let color_g = load_rendered_texel(texel_f + vec2i(1, 0), last_texel);
+	let color_h = load_rendered_texel(texel_f + vec2i(2, 0), last_texel);
+	let color_i = load_rendered_texel(texel_f + vec2i(-1, 1), last_texel);
+	let color_j = load_rendered_texel(texel_f + vec2i(0, 1), last_texel);
+	let color_k = load_rendered_texel(texel_f + vec2i(1, 1), last_texel);
+	let color_l = load_rendered_texel(texel_f + vec2i(2, 1), last_texel);
+	let color_n = load_rendered_texel(texel_f + vec2i(0, 2), last_texel);
+	let color_o = load_rendered_texel(texel_f + vec2i(1, 2), last_texel);
 
-	// Approximate luma (times 2): blue/2 + red/2 + green.
-	let luma_bc = blue_bc * 0.5 + (red_bc * 0.5 + green_bc);
-	let luma_ijfe = blue_ijfe * 0.5 + (red_ijfe * 0.5 + green_ijfe);
-	let luma_klhg = blue_klhg * 0.5 + (red_klhg * 0.5 + green_klhg);
-	let luma_on = blue_on * 0.5 + (red_on * 0.5 + green_on);
-	let luma_b = luma_bc.x;
-	let luma_c = luma_bc.y;
-	let luma_i = luma_ijfe.x;
-	let luma_j = luma_ijfe.y;
-	let luma_f = luma_ijfe.z;
-	let luma_e = luma_ijfe.w;
-	let luma_k = luma_klhg.x;
-	let luma_l = luma_klhg.y;
-	let luma_h = luma_klhg.z;
-	let luma_g = luma_klhg.w;
-	let luma_o = luma_on.z;
-	let luma_n = luma_on.w;
+	let luma_b = easu_luma(color_b);
+	let luma_c = easu_luma(color_c);
+	let luma_e = easu_luma(color_e);
+	let luma_f = easu_luma(color_f);
+	let luma_g = easu_luma(color_g);
+	let luma_h = easu_luma(color_h);
+	let luma_i = easu_luma(color_i);
+	let luma_j = easu_luma(color_j);
+	let luma_k = easu_luma(color_k);
+	let luma_l = easu_luma(color_l);
+	let luma_n = easu_luma(color_n);
+	let luma_o = easu_luma(color_o);
 
 	// Edge direction and length, bilinearly blended from the four texels around the sample.
 	var direction_and_length = vec3f(0.0);
@@ -219,26 +227,22 @@ fn fsr_easu(output_pixel: vec2f) -> vec3f {
 	let clip_point = approximate_reciprocal_low(lobe);
 
 	// Min and max of the four nearest texels (f g j k), used to remove ringing.
-	let color_f = vec3f(red_ijfe.z, green_ijfe.z, blue_ijfe.z);
-	let color_g = vec3f(red_klhg.w, green_klhg.w, blue_klhg.w);
-	let color_j = vec3f(red_ijfe.y, green_ijfe.y, blue_ijfe.y);
-	let color_k = vec3f(red_klhg.x, green_klhg.x, blue_klhg.x);
 	let minimum_4 = min(min(color_f, color_g), min(color_j, color_k));
 	let maximum_4 = max(max(color_f, color_g), max(color_j, color_k));
 
 	var accumulated = vec4f(0.0);
-	accumulated += easu_tap(vec2f(0.0, -1.0) - position, direction, kernel_length, lobe, clip_point, vec3f(red_bc.x, green_bc.x, blue_bc.x));       // b
-	accumulated += easu_tap(vec2f(1.0, -1.0) - position, direction, kernel_length, lobe, clip_point, vec3f(red_bc.y, green_bc.y, blue_bc.y));       // c
-	accumulated += easu_tap(vec2f(-1.0, 1.0) - position, direction, kernel_length, lobe, clip_point, vec3f(red_ijfe.x, green_ijfe.x, blue_ijfe.x)); // i
-	accumulated += easu_tap(vec2f(0.0, 1.0) - position, direction, kernel_length, lobe, clip_point, color_j);                                        // j
-	accumulated += easu_tap(vec2f(0.0, 0.0) - position, direction, kernel_length, lobe, clip_point, color_f);                                        // f
-	accumulated += easu_tap(vec2f(-1.0, 0.0) - position, direction, kernel_length, lobe, clip_point, vec3f(red_ijfe.w, green_ijfe.w, blue_ijfe.w)); // e
-	accumulated += easu_tap(vec2f(1.0, 1.0) - position, direction, kernel_length, lobe, clip_point, color_k);                                        // k
-	accumulated += easu_tap(vec2f(2.0, 1.0) - position, direction, kernel_length, lobe, clip_point, vec3f(red_klhg.y, green_klhg.y, blue_klhg.y)); // l
-	accumulated += easu_tap(vec2f(2.0, 0.0) - position, direction, kernel_length, lobe, clip_point, vec3f(red_klhg.z, green_klhg.z, blue_klhg.z)); // h
-	accumulated += easu_tap(vec2f(1.0, 0.0) - position, direction, kernel_length, lobe, clip_point, color_g);                                        // g
-	accumulated += easu_tap(vec2f(1.0, 2.0) - position, direction, kernel_length, lobe, clip_point, vec3f(red_on.z, green_on.z, blue_on.z));       // o
-	accumulated += easu_tap(vec2f(0.0, 2.0) - position, direction, kernel_length, lobe, clip_point, vec3f(red_on.w, green_on.w, blue_on.w));       // n
+	accumulated += easu_tap(vec2f(0.0, -1.0) - position, direction, kernel_length, lobe, clip_point, color_b);
+	accumulated += easu_tap(vec2f(1.0, -1.0) - position, direction, kernel_length, lobe, clip_point, color_c);
+	accumulated += easu_tap(vec2f(-1.0, 1.0) - position, direction, kernel_length, lobe, clip_point, color_i);
+	accumulated += easu_tap(vec2f(0.0, 1.0) - position, direction, kernel_length, lobe, clip_point, color_j);
+	accumulated += easu_tap(vec2f(0.0, 0.0) - position, direction, kernel_length, lobe, clip_point, color_f);
+	accumulated += easu_tap(vec2f(-1.0, 0.0) - position, direction, kernel_length, lobe, clip_point, color_e);
+	accumulated += easu_tap(vec2f(1.0, 1.0) - position, direction, kernel_length, lobe, clip_point, color_k);
+	accumulated += easu_tap(vec2f(2.0, 1.0) - position, direction, kernel_length, lobe, clip_point, color_l);
+	accumulated += easu_tap(vec2f(2.0, 0.0) - position, direction, kernel_length, lobe, clip_point, color_h);
+	accumulated += easu_tap(vec2f(1.0, 0.0) - position, direction, kernel_length, lobe, clip_point, color_g);
+	accumulated += easu_tap(vec2f(1.0, 2.0) - position, direction, kernel_length, lobe, clip_point, color_o);
+	accumulated += easu_tap(vec2f(0.0, 2.0) - position, direction, kernel_length, lobe, clip_point, color_n);
 
 	// Normalize and clamp to the 2x2 neighbourhood (de-ringing).
 	return min(maximum_4, max(minimum_4, accumulated.xyz / accumulated.w));

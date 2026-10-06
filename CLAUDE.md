@@ -24,6 +24,8 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --msaa=off              no 4x MSAA
   --target-fps=120        dynamic resolution's target (default: display refresh rate)
   --pick-center-of=Sphere click the named object's centre (tests picking end to end)
+  --mirror=Cube           scale X = -1 on the named object (mirrored-transform check)
+  --flatten=Sphere        scale Y = 0 on the named object (zero-scale check)
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't
@@ -36,6 +38,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
 - **Look at the result with `--screenshot`,** never by capturing the desktop: the window may be
   behind others, and a desktop capture can show the owner's other windows. Convert the BMP to
   PNG (PowerShell `System.Drawing`) and halve it to view it.
+- **Game logic that needs no GPU is tested in `src/game/scene_test.odin`** (`odin test src/game`).
 - **UI behaviour is tested in `src/ui/ui_test.odin`** by running real frames with simulated
   input and finding widgets by the text they show. Extend it when adding or changing widgets.
 - macOS and Linux build scripts don't exist yet.
@@ -156,7 +159,8 @@ the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of t
 - **Don't set an environment variable named `ODIN_ROOT` in scripts.** Odin reads it and
   fails with "Invalid ODIN_ROOT".
 - **Batch files must have CRLF line endings,** or `goto` labels can break (`.gitattributes`
-  enforces this).
+  enforces this). Editing `build.bat` with `sed` from the Bash tool can drop the CRs; check with
+  `file build.bat` and restore them with `sed -i 's/*$//' build.bat`.
 - **Untyped float constants default to `f64`** when assigned with `:=`. Declare `f32`
   explicitly when the value is mixed with `[3]f32` math.
 - **Appending to `#soa[dynamic]T` needs a typed literal:** `append(&ps, Particle{...})`.

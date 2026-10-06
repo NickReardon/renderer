@@ -26,6 +26,7 @@ OVERLAY_WGSL :: #load("shaders/overlay.wgsl", string) + "\n" + COMMON_WGSL
 // Called after a hot reload: rebuilds pipelines from the newly loaded shader source.
 reload_shaders :: proc(renderer: ^Renderer) {
 	if create_pipelines(renderer) {
+		renderer.msaa_rejected_sample_count = 0 // shaders build again: a failed MSAA change may now work
 		fmt.println("render: shaders reloaded")
 	} else {
 		fmt.eprintln("render: shader reload failed, keeping the previous pipelines")
@@ -186,7 +187,8 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		{stepMode = .Vertex, arrayStride = size_of([3]f32), attributeCount = 1, attributes = &position_attribute},
 		{stepMode = .Vertex, arrayStride = size_of([3]f32), attributeCount = 1, attributes = &normal_attribute},
 	}
-	mesh_pipeline := wgpu.DeviceCreateRenderPipeline(renderer.device, &{
+	mesh_fragment := wgpu.FragmentState{module = mesh_module, entryPoint = "fragment_main", targetCount = 1, targets = &scene_opaque_target}
+	mesh_descriptor := wgpu.RenderPipelineDescriptor{
 		label        = "mesh",
 		layout       = frame_and_instances_layout,
 		vertex       = {
@@ -198,8 +200,13 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 		primitive    = {topology = .TriangleList, frontFace = .CCW, cullMode = .Back},
 		depthStencil = &depth_test_and_write,
 		multisample  = scene_multisample,
-		fragment     = &wgpu.FragmentState{module = mesh_module, entryPoint = "fragment_main", targetCount = 1, targets = &scene_opaque_target},
-	})
+		fragment     = &mesh_fragment,
+	}
+	mesh_pipeline := wgpu.DeviceCreateRenderPipeline(renderer.device, &mesh_descriptor)
+	// Mirrored transforms (negative determinant) reverse winding: same pipeline, clockwise front.
+	mesh_descriptor.label = "mesh (mirrored)"
+	mesh_descriptor.primitive.frontFace = .CW
+	mesh_mirrored_pipeline := wgpu.DeviceCreateRenderPipeline(renderer.device, &mesh_descriptor)
 
 	// Debug lines: one interleaved buffer of position + color.
 	line_attributes := [2]wgpu.VertexAttribute{
@@ -263,7 +270,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 	easu_pipeline, rcas_pipeline, resample_pipeline, resolve_pipeline := create_post_pipelines(renderer)
 
 	if !pop_error_scope(renderer) {
-		for pipeline in ([]wgpu.RenderPipeline{mesh_pipeline, line_pipeline, grid_pipeline, overlay_pipeline, easu_pipeline, rcas_pipeline, resample_pipeline, resolve_pipeline}) {
+		for pipeline in ([]wgpu.RenderPipeline{mesh_pipeline, mesh_mirrored_pipeline, line_pipeline, grid_pipeline, overlay_pipeline, easu_pipeline, rcas_pipeline, resample_pipeline, resolve_pipeline}) {
 			if pipeline != nil do wgpu.RenderPipelineRelease(pipeline)
 		}
 		return false
@@ -271,6 +278,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 
 	release_pipelines(renderer)
 	renderer.mesh_pipeline = mesh_pipeline
+	renderer.mesh_mirrored_pipeline = mesh_mirrored_pipeline
 	renderer.line_pipeline = line_pipeline
 	renderer.grid_pipeline = grid_pipeline
 	renderer.overlay_pipeline = overlay_pipeline
@@ -285,6 +293,7 @@ create_pipelines :: proc(renderer: ^Renderer) -> bool {
 release_pipelines :: proc(renderer: ^Renderer) {
 	pipelines := [?]^wgpu.RenderPipeline{
 		&renderer.mesh_pipeline,
+		&renderer.mesh_mirrored_pipeline,
 		&renderer.line_pipeline,
 		&renderer.grid_pipeline,
 		&renderer.overlay_pipeline,

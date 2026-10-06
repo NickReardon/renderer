@@ -15,7 +15,6 @@
 package game
 
 import "core:fmt"
-import "core:math"
 import "core:math/linalg"
 import "engine:core"
 import "engine:platform"
@@ -149,7 +148,11 @@ pick_entity :: proc(scene: ^Scene, ray: core.Ray) -> (nearest: Entity_Handle, hi
 		if !asset_found {
 			continue
 		}
-		local_ray := core.ray_transformed(ray, linalg.inverse(entity_world_matrix(entity)))
+		world := entity_world_matrix(entity)
+		if abs(core.linear_determinant(world)) < 1e-12 {
+			continue // a zero scale flattens the object: no inverse, and nothing solid to hit
+		}
+		local_ray := core.ray_transformed(ray, linalg.inverse(world))
 		box_t, box_hit := core.ray_box_intersection(local_ray, asset.bounds_min, asset.bounds_max)
 		if !box_hit || box_t >= nearest_t {
 			continue // can't be closer than what we already have
@@ -247,8 +250,10 @@ frame_selection :: proc(memory: ^Game_Memory) {
 	center := (bounds_min + bounds_max) * 0.5
 	radius := max(linalg.length(bounds_max - bounds_min) * 0.5, 0.1)
 	memory.camera.pivot = center
-	// Distance at which a sphere of this radius fills the vertical field of view, plus margin.
-	memory.camera.distance = radius / math.sin(memory.camera.vertical_fov * 0.5) * 1.15
+	// Back off until the bounding sphere fits both the vertical and horizontal field of view.
+	viewport_size := memory.viewport_max - memory.viewport_min
+	aspect_ratio := viewport_size.x / max(viewport_size.y, 1) if viewport_size.x > 0 else 1
+	memory.camera.distance = core.distance_to_fit_sphere(radius, memory.camera.vertical_fov, aspect_ratio) * 1.1
 }
 
 // Draws the selected objects' edges in orange, pulled very slightly toward the camera so they

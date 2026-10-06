@@ -33,6 +33,48 @@ look_at :: proc(eye, target, up: [3]f32) -> matrix[4, 4]f32 {
 	}
 }
 
+// Determinant of a transform's 3x3 linear part (rotation and scale). Negative means the
+// transform mirrors (an odd number of negative scales), which reverses triangle winding.
+// Zero means it flattens space (a zero scale) and has no inverse.
+linear_determinant :: proc(transform: matrix[4, 4]f32) -> f32 {
+	row_0 := [3]f32{transform[0, 0], transform[0, 1], transform[0, 2]}
+	row_1 := [3]f32{transform[1, 0], transform[1, 1], transform[1, 2]}
+	row_2 := [3]f32{transform[2, 0], transform[2, 1], transform[2, 2]}
+	return linalg.dot(row_0, linalg.cross(row_1, row_2))
+}
+
+// The matrix that transforms normals for `transform`: the inverse transpose of its linear
+// part, up to a positive scale (normals are renormalized after transforming anyway).
+//
+// It's computed from cofactors (cross products of the rows) instead of an inverse, so it never
+// divides: a zero scale gives finite results (faces that collapse simply get zero-length
+// normals), where an inverse would produce infinities. Multiplying by the determinant's sign
+// keeps normals pointing outward for mirrored transforms.
+normal_matrix :: proc(transform: matrix[4, 4]f32) -> matrix[4, 4]f32 {
+	row_0 := [3]f32{transform[0, 0], transform[0, 1], transform[0, 2]}
+	row_1 := [3]f32{transform[1, 0], transform[1, 1], transform[1, 2]}
+	row_2 := [3]f32{transform[2, 0], transform[2, 1], transform[2, 2]}
+	cofactor_0 := linalg.cross(row_1, row_2)
+	cofactor_1 := linalg.cross(row_2, row_0)
+	cofactor_2 := linalg.cross(row_0, row_1)
+	sign: f32 = -1 if linalg.dot(row_0, cofactor_0) < 0 else 1
+	return matrix[4, 4]f32{
+		cofactor_0.x * sign, cofactor_0.y * sign, cofactor_0.z * sign, 0,
+		cofactor_1.x * sign, cofactor_1.y * sign, cofactor_1.z * sign, 0,
+		cofactor_2.x * sign, cofactor_2.y * sign, cofactor_2.z * sign, 0,
+		0,                   0,                   0,                   1,
+	}
+}
+
+// How far a perspective camera must be from a sphere's centre for the whole sphere to fit in
+// view. The limiting angle is the narrower of the vertical field of view and the horizontal
+// one (which depends on the aspect ratio): a tall, narrow viewport is limited horizontally.
+distance_to_fit_sphere :: proc(radius, vertical_fov, aspect_ratio: f32) -> f32 {
+	horizontal_fov := 2 * math.atan(math.tan(vertical_fov * 0.5) * aspect_ratio)
+	narrowest_fov := min(vertical_fov, horizontal_fov)
+	return radius / math.sin(narrowest_fov * 0.5)
+}
+
 // Perspective projection with reverse-Z and no far plane.
 // `vertical_fov` is the full vertical field of view in radians.
 //
