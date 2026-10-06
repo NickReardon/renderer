@@ -13,7 +13,6 @@
 package game
 
 import "core:fmt"
-import "core:math"
 import "core:math/linalg"
 import "core:strings"
 import "engine:core"
@@ -188,12 +187,7 @@ set_entity_name :: proc(entity: ^Entity, name: string) {
 
 // World matrix: scale, then rotate (Z, X, Y), then translate.
 entity_world_matrix :: proc(entity: ^Entity) -> matrix[4, 4]f32 {
-	rotation_radians := entity.rotation * (math.PI / 180)
-	rotation :=
-		linalg.matrix4_rotate_f32(rotation_radians.y, core.WORLD_UP) *
-		linalg.matrix4_rotate_f32(rotation_radians.x, core.WORLD_RIGHT) *
-		linalg.matrix4_rotate_f32(rotation_radians.z, [3]f32{0, 0, 1})
-	return linalg.matrix4_translate_f32(entity.position) * rotation * linalg.matrix4_scale_f32(entity.scale)
+	return linalg.matrix4_translate_f32(entity.position) * core.euler_rotation_matrix(entity.rotation) * linalg.matrix4_scale_f32(entity.scale)
 }
 
 // A name not used by any other entity: "Cube", then "Cube (1)", "Cube (2)", ... as in Unity.

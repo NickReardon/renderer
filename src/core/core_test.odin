@@ -190,6 +190,84 @@ test_distance_to_fit_sphere :: proc(test: ^testing.T) {
 }
 
 @(test)
+test_euler_round_trip :: proc(test: ^testing.T) {
+	matrices_match :: proc(a, b: matrix[4, 4]f32) -> bool {
+		for row in 0 ..< 3 {
+			for column in 0 ..< 3 {
+				if abs(a[row, column] - b[row, column]) > 1e-4 {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
+	// Angles -> matrix -> angles -> matrix gives the same rotation (the angles themselves can
+	// differ, since several Euler triples describe one rotation).
+	for angles in ([][3]f32{{10, 20, 30}, {-45, 170, -100}, {89, -30, 60}, {0, 0, 0}, {120, 45, 10}}) {
+		original := euler_rotation_matrix(angles)
+		recovered := euler_rotation_matrix(euler_degrees_from_matrix(original))
+		testing.expectf(test, matrices_match(original, recovered), "round trip of %v gave a different rotation", angles)
+	}
+
+	// Gimbal lock (x = 90°): still the same rotation.
+	locked := euler_rotation_matrix({90, 30, 20})
+	testing.expect(test, matrices_match(locked, euler_rotation_matrix(euler_degrees_from_matrix(locked))), "gimbal-locked round trip")
+
+	// Unity's order: rotating 90° about Y turns +Z (forward in Unity terms) toward +X.
+	turned := euler_rotation_matrix({0, 90, 0}) * [4]f32{0, 0, 1, 0}
+	testing.expect(test, linalg.length(turned.xyz - [3]f32{1, 0, 0}) < 1e-5, "90° about Y maps +Z to +X")
+}
+
+@(test)
+test_euler_near_hint :: proc(test: ^testing.T) {
+	// Turning steadily about X from 0° to 170°, feeding each result back as the next hint: the X
+	// angle climbs smoothly instead of jumping to (53, 180, 180)-style equivalents.
+	angles: [3]f32
+	for step in 1 ..= 17 {
+		target := f32(step * 10)
+		rotation := linalg.matrix4_rotate_f32(target * math.PI / 180, WORLD_RIGHT)
+		angles = euler_degrees_from_matrix_near(rotation, angles)
+		testing.expectf(test, abs(angles.x - target) < 1e-2 && abs(angles.y) < 1e-2 && abs(angles.z) < 1e-2, "step %d: expected (%v, 0, 0), got %v", step, target, angles)
+	}
+
+	// Past a full turn: stays continuous (370°, not 10°) when the hint is near there.
+	rotation := linalg.matrix4_rotate_f32(10 * math.PI / 180, WORLD_UP)
+	near_full_turn := euler_degrees_from_matrix_near(rotation, {0, 365, 0})
+	testing.expectf(test, abs(near_full_turn.y - 370) < 1e-2, "expected 370° about Y, got %v", near_full_turn)
+
+	// Whatever is chosen, it's the same rotation.
+	for hint in ([][3]f32{{0, 0, 0}, {170, 10, -20}, {-400, 720, 90}}) {
+		original := euler_rotation_matrix({35, -120, 75})
+		chosen := euler_rotation_matrix(euler_degrees_from_matrix_near(original, hint))
+		for row in 0 ..< 3 {
+			for column in 0 ..< 3 {
+				testing.expectf(test, abs(original[row, column] - chosen[row, column]) < 1e-4, "hint %v changed the rotation", hint)
+			}
+		}
+	}
+}
+
+@(test)
+test_closest_line_parameter_to_ray :: proc(test: ^testing.T) {
+	// The X axis, and a ray straight down through x = 3.
+	t, ok := closest_line_parameter_to_ray({0, 0, 0}, {1, 0, 0}, {origin = {3, 5, 0}, direction = {0, -1, 0}})
+	testing.expect(test, ok && abs(t - 3) < 1e-5, "ray crossing the axis at x = 3")
+
+	// A skew ray passing above the axis at x = -2, z offset: still t = -2.
+	t, ok = closest_line_parameter_to_ray({0, 0, 0}, {1, 0, 0}, {origin = {-2, 4, 7}, direction = {0, 0, -1}})
+	testing.expect(test, ok && abs(t + 2) < 1e-5, "skew ray closest at x = -2")
+
+	// A scaled line direction gives t in units of that direction.
+	t, ok = closest_line_parameter_to_ray({1, 0, 0}, {2, 0, 0}, {origin = {5, 5, 0}, direction = {0, -1, 0}})
+	testing.expect(test, ok && abs(t - 2) < 1e-5, "t is measured in line-direction units")
+
+	// A ray along the axis itself: no unique answer.
+	_, ok = closest_line_parameter_to_ray({0, 0, 0}, {1, 0, 0}, {origin = {-5, 0, 0}, direction = {1, 0, 0}})
+	testing.expect(test, !ok, "parallel ray has no closest parameter")
+}
+
+@(test)
 test_perspective_reverse_z :: proc(test: ^testing.T) {
 	near: f32 = 0.1
 	projection := perspective_reverse_z(math.to_radians(f32(60)), 16.0 / 9.0, near)

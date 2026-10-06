@@ -28,6 +28,7 @@ Game_Memory :: struct {
 	camera:                Viewport_Camera,
 	scene:                 Scene,
 	editor:                Editor_State,
+	gizmo:                 Gizmo_State,
 	elapsed_seconds:       f64,
 	viewport_min:          [2]f32, // the 3D view's rectangle in the last frame's layout (pixels)
 	viewport_max:          [2]f32,
@@ -83,6 +84,7 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 	game_memory.show_grid = true
 	game_memory.stats_section_open = true
 	game_memory.editor = {hierarchy_open = true, create_section_open = true, transform_section_open = true}
+	game_memory.gizmo.tool = .Move // Unity starts with the Move tool
 	game_memory.render_settings = {
 		dynamic_enabled       = false,
 		fixed_scale_percent   = 100,
@@ -104,6 +106,20 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 	create_primitive_entity(scene, .Sphere, {2.2, 0.5, 0}, {0.85, 0.35, 0.2})
 	create_primitive_entity(scene, .Cylinder, {-2.2, 1, 0}, {0.2, 0.55, 0.85})
 	apply_scene_developer_flags(scene, arguments)
+	for argument in arguments {
+		switch argument {
+		case "--tool=hand":
+			game_memory.gizmo.tool = .Hand
+		case "--tool=move":
+			game_memory.gizmo.tool = .Move
+		case "--tool=rotate":
+			game_memory.gizmo.tool = .Rotate
+		case "--tool=scale":
+			game_memory.gizmo.tool = .Scale
+		case "--local":
+			game_memory.gizmo.local_orientation = true
+		}
+	}
 	return true
 }
 
@@ -169,7 +185,13 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	if !viewport_has_keyboard {
 		viewport_input.keys = {}
 	}
-	update_editor(game_memory, &viewport_input, viewport_has_mouse, viewport_has_keyboard)
+	// Hand tool (Q): the left button pans like the middle one, and doesn't select (as in Unity).
+	alt_held := input.keys[.Left_Alt].down || input.keys[.Right_Alt].down
+	if game_memory.gizmo.tool == .Hand && !alt_held {
+		viewport_input.mouse[.Middle] = viewport_input.mouse[.Left]
+		viewport_input.mouse[.Left] = {}
+	}
+	update_editor(game_memory, input, &viewport_input, viewport_has_mouse, viewport_has_keyboard)
 	update_viewport_camera(&game_memory.camera, &viewport_input)
 
 	game_memory.elapsed_seconds += f64(input.delta_seconds)
@@ -194,6 +216,7 @@ game_update :: proc(input: ^platform.Input) -> bool {
 		}
 	}
 	draw_selection_outlines(game_memory, renderer)
+	draw_gizmo(game_memory, renderer) // before ui.end_frame, so panels draw over it
 
 	// The grid shows the X (red) and Z (blue) axes; add the vertical Y axis in green.
 	render.debug_line(renderer, {0, 0, 0}, {0, 2, 0}, {0.3, 0.85, 0.3, 1})
@@ -324,7 +347,27 @@ VIEWPORT_AREA :: "Viewport"
 draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 	user_interface := &memory.user_interface
 	draw_hierarchy_panel(memory, input)
-	ui.flexible_space(user_interface, VIEWPORT_AREA) // the 3D view's share of the window
+	// The 3D view's share of the window, with Unity-style toolbars laid over its top edge.
+	if ui.area(user_interface, VIEWPORT_AREA) {
+		if ui.row(user_interface, "toolbars") {
+			if ui.toolbar(user_interface, "tools") {
+				tool_labels := TRANSFORM_TOOL_LABELS
+				for tool in Transform_Tool {
+					if ui.toggle_button(user_interface, tool_labels[tool], memory.gizmo.tool == tool) {
+						memory.gizmo.tool = tool
+					}
+				}
+			}
+			if ui.toolbar(user_interface, "orientation") {
+				// Scale always works in the object's own axes, so the toggle only matters for
+				// Move and Rotate.
+				orientation_label := "Local" if memory.gizmo.local_orientation else "Global"
+				if ui.toggle_button(user_interface, orientation_label, false) {
+					memory.gizmo.local_orientation = !memory.gizmo.local_orientation
+				}
+			}
+		}
+	}
 	if ui.panel(user_interface, "Inspector", 320) {
 		draw_selection_inspector(memory)
 

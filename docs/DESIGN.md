@@ -404,3 +404,44 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
 **New tests:** `test_normal_matrix`, `test_distance_to_fit_sphere`, the UI overflow check, and
 `src/game/scene_test.odin` (entity handles, unique names). The game package now has tests;
 `build.bat test` runs core, UI and game. Each new test was confirmed to fail without its fix.
+
+## Modeler, step 2: transform gizmo (Unity's Q W E R)
+
+- **Tools:** Q Hand (left-drag pans, no selection), W Move (arrows), E Rotate (rings), R Scale
+  (per-axis handles plus a centre handle for uniform scale). Toolbar buttons over the 3D view
+  mirror the keys, plus a Global/Local toggle for Move and Rotate (Scale always uses the
+  object's own axes, as in Unity). Ctrl snaps (0.25 units, 15°, 0.1×). Escape during a drag
+  cancels it. Hovered and dragged handles turn yellow.
+- **Drawn as 2D overlay, hit-tested in screen space.** The gizmo is drawn on top of the scene at
+  a constant size on screen (110 points), like Unity's. The overlay gained two shapes for it,
+  both anti-aliased with signed distance functions: thick segments and filled triangles
+  (arrowheads). Handles are picked by the distance from the mouse to their projected line or
+  ring (9 points). Rotation rings draw their far halves faintly, then their near halves.
+- **Dragging is solved in 3D:**
+  - Move and per-axis Scale use the closest point between the mouse ray and the axis line
+    (`core.closest_line_parameter_to_ray`);
+  - Rotate measures the screen angle swept around the gizmo's centre, accumulated across ±180°,
+    and signed by whether the axis faces the viewer (right-hand rule). This matches Unity's
+    behaviour; the screen angle differs from the true angle when a ring is seen at a slant;
+  - uniform scale is exponential in horizontal mouse movement (150 points doubles), so
+    left and right are symmetric.
+- **Every frame recomputes from the transforms saved at the press,** rather than adding
+  increments. Nothing drifts, snapping is exact, and Escape restores the originals. Several
+  selected objects rotate about their shared centre like a rigid group.
+- **Euler angles stay continuous:** `core.euler_degrees_from_matrix_near` picks, among the angle
+  triples for the same rotation, the one nearest the previous angles (Unity keeps a similar
+  hint). Without it, turning past 90° about X showed e.g. (53°, 180°, 180°).
+- **Input routing:**
+  - the gizmo is updated before selection clicks, and a press on a handle never selects;
+  - while dragging it reads unfiltered input, so the drag continues over panels and the
+    release is never lost;
+  - Alt+left stays orbiting.
+- **Tests:**
+  - core: Euler round trips (including gimbal lock and Unity's axis convention), the
+    nearest-angles choice, and line/ray closest points;
+  - game: Move by exactly one handle length on X only; drift-free return and Escape restore;
+    rotation about Y only; X scale doubling exactly; uniform scale; hidden for the Hand tool
+    and an empty selection;
+  - UI: toolbar button clicks, and the toolbar taking the mouse.
+- **Not yet:** undo (next), plane handles (move on two axes at once), a screen-space rotation
+  ring, Pivot/Center toggle, and scaling several objects' positions about their centre.

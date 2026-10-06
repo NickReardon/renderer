@@ -26,6 +26,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --pick-center-of=Sphere click the named object's centre (tests picking end to end)
   --mirror=Cube           scale X = -1 on the named object (mirrored-transform check)
   --flatten=Sphere        scale Y = 0 on the named object (zero-scale check)
+  --tool=rotate           start with a tool (hand, move, rotate, scale); --local for Local axes
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't
@@ -72,7 +73,8 @@ src/platform/  plain shared types (Input, Native_Window); no procedures, importa
 src/host/      executable: SDL3 window, input, main loop, hot reload; only package using SDL
 src/game/      editor + game, hot-reloaded DLL; all persistent state in Game_Memory
                game.odin (frame, settings, panels), scene.odin (entities, mesh assets),
-               editor.odin (selection, picking, Hierarchy, Inspector, shortcuts), camera.odin
+               editor.odin (selection, picking, Hierarchy, Inspector, shortcuts), camera.odin,
+               gizmo.odin (Q W E R transform tools)
 src/render/    renderer; only package using wgpu (render.odin API, device.odin, pipelines.odin, shaders/)
 src/ui/        immediate-mode UI; only package using Clay and fontstash; draws via render's overlay API
 src/core/      math and mesh; imports no engine package, no GPU or OS code; tests in core_test.odin

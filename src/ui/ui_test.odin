@@ -15,6 +15,7 @@ Test_Model :: struct {
 	button_count: int,
 	vector:       [3]f32,
 	row_clicks:   int,
+	tool_clicks:  int,
 	inspected:    Inspected_Data,
 }
 
@@ -28,7 +29,13 @@ Inspected_Data :: struct {
 @(private = "file")
 run_frame :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model) -> clay.ClayArray(clay.RenderCommand) {
 	begin_frame(state, input)
-	flexible_space(state, "Test viewport")
+	if area(state, "Test viewport") {
+		if toolbar(state, "Test toolbar") {
+			if toggle_button(state, "Tool", model.tool_clicks % 2 == 1) {
+				model.tool_clicks += 1
+			}
+		}
+	}
 	if panel(state, "Test panel", 300) {
 		number_field(state, "Number", &model.number, 0.1, -100, 100, "%.3f")
 		checkbox(state, "Flag", &model.flag)
@@ -278,6 +285,20 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	z_marker_center, z_marker_found := find_text(commands, "Z")
 	testing.expect(test, z_marker_found && z_marker_center.x < window_width, "the Z field should be inside the window")
 	model.vector = saved_vector
+	free_all(context.temp_allocator)
+
+	// --- A toolbar over the view: its button clicks, and it takes the mouse while the area
+	// around it (the 3D view) doesn't.
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	tool_center, tool_found := find_text(commands, "Tool")
+	testing.expect(test, tool_found, "the toolbar button should be visible")
+	press_mouse(&input, tool_center)
+	run_frame(state, &input, &model)
+	testing.expect(test, wants_mouse(state), "the toolbar should take the mouse")
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	testing.expect_value(test, model.tool_clicks, 1)
 	free_all(context.temp_allocator)
 
 	// --- The mouse belongs to the viewport outside the panel, and to the UI over it.

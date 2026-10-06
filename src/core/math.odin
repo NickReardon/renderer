@@ -75,6 +75,83 @@ distance_to_fit_sphere :: proc(radius, vertical_fov, aspect_ratio: f32) -> f32 {
 	return radius / math.sin(narrowest_fov * 0.5)
 }
 
+// Rotation from Euler angles in degrees, applied Z first, then X, then Y (Unity's order):
+// R = Ry * Rx * Rz.
+euler_rotation_matrix :: proc(rotation_degrees: [3]f32) -> matrix[4, 4]f32 {
+	radians := rotation_degrees * (math.PI / 180)
+	return(
+		linalg.matrix4_rotate_f32(radians.y, WORLD_UP) *
+		linalg.matrix4_rotate_f32(radians.x, WORLD_RIGHT) *
+		linalg.matrix4_rotate_f32(radians.z, [3]f32{0, 0, 1}) \
+	)
+}
+
+// Euler angles in degrees (Z, X, Y order, as above) of a pure rotation matrix.
+//
+// Multiplying out Ry * Rx * Rz gives, among other entries,
+//   [1][2] = -sin x
+//   [0][2] =  sin y cos x,   [2][2] = cos y cos x
+//   [1][0] =  cos x sin z,   [1][1] = cos x cos z
+// so x comes from [1][2], and y and z from atan2 of their pairs. When cos x is ~0 (x = ±90°,
+// gimbal lock) y and z turn about the same axis and only their sum matters: z is set to 0 and
+// y taken from the remaining entries.
+euler_degrees_from_matrix :: proc(rotation: matrix[4, 4]f32) -> [3]f32 {
+	sin_x := clamp(-rotation[1, 2], -1, 1)
+	x := math.asin(sin_x)
+	y, z: f32
+	if abs(sin_x) < 0.99999 {
+		y = math.atan2(rotation[0, 2], rotation[2, 2])
+		z = math.atan2(rotation[1, 0], rotation[1, 1])
+	} else {
+		y = math.atan2(-rotation[2, 0], rotation[0, 0])
+		z = 0
+	}
+	return [3]f32{x, y, z} * (180 / math.PI)
+}
+
+// Like euler_degrees_from_matrix, but chooses, among the angle triples that describe the same
+// rotation, the one closest to `hint` (usually the previous angles). Every rotation has two
+// basic solutions, (x, y, z) and (180 - x, y + 180, z + 180), and each angle can also shift by
+// whole turns. Without this, turning an object steadily about X past 90° would make the shown
+// angles jump (e.g. to 53, 180, 180). Unity keeps a similar hint for the same reason.
+euler_degrees_from_matrix_near :: proc(rotation: matrix[4, 4]f32, hint: [3]f32) -> [3]f32 {
+	wrap_near :: proc(angles, hint: [3]f32) -> (wrapped: [3]f32) {
+		for axis in 0 ..< 3 {
+			wrapped[axis] = angles[axis] + 360 * math.round((hint[axis] - angles[axis]) / 360)
+		}
+		return
+	}
+	primary := euler_degrees_from_matrix(rotation)
+	alternative := [3]f32{180 - primary.x, primary.y + 180, primary.z + 180}
+	primary = wrap_near(primary, hint)
+	alternative = wrap_near(alternative, hint)
+	if linalg.length(alternative - hint) < linalg.length(primary - hint) {
+		return alternative
+	}
+	return primary
+}
+
+// Where on the line `line_origin + t * line_direction` the ray passes closest. This is how a
+// gizmo turns a mouse ray into a position along an axis. `ok` is false when the ray runs
+// parallel to the line, where every point is equally close.
+closest_line_parameter_to_ray :: proc(line_origin, line_direction: [3]f32, ray: Ray) -> (t: f32, ok: bool) {
+	// Minimise |(line_origin + t*d) - (ray.origin + s*r)| over t and s (two linear equations).
+	direction := line_direction
+	ray_direction := ray.direction
+	offset := line_origin - ray.origin
+	direction_dot_direction := linalg.dot(direction, direction)
+	direction_dot_ray := linalg.dot(direction, ray_direction)
+	ray_dot_ray := linalg.dot(ray_direction, ray_direction)
+	direction_dot_offset := linalg.dot(direction, offset)
+	ray_dot_offset := linalg.dot(ray_direction, offset)
+	denominator := direction_dot_direction * ray_dot_ray - direction_dot_ray * direction_dot_ray
+	if abs(denominator) < 1e-9 * direction_dot_direction * ray_dot_ray {
+		return 0, false
+	}
+	t = (direction_dot_ray * ray_dot_offset - ray_dot_ray * direction_dot_offset) / denominator
+	return t, true
+}
+
 // Perspective projection with reverse-Z and no far plane.
 // `vertical_fov` is the full vertical field of view in radians.
 //

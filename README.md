@@ -26,7 +26,8 @@ build.bat test     run the core and UI tests
 | Click / Shift+click / Ctrl+click | Select / add to selection / toggle |
 | Delete, Ctrl+D | Delete, duplicate the selection |
 | F | Frame the selection |
-| Esc | Clear the selection |
+| Esc | Clear the selection (during a gizmo drag: cancel it) |
+| Q / W / E / R | Hand (pan), Move, Rotate, Scale tools; drag a handle to transform, Ctrl to snap |
 
 The Hierarchy panel on the left creates objects (cube, sphere, cylinder, plane) and lists the scene; the Inspector on the right edits the selected object, generated from its fields, plus view, camera and rendering settings. Number fields: drag sideways to change, click to type (Enter applies, Escape cancels).
 

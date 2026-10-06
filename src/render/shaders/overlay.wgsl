@@ -1,9 +1,12 @@
-// 2D overlay (UI): each instance is one quad in pixel coordinates, origin top-left.
-//   mode 0 (shape): a rounded rectangle, filled or outlined, anti-aliased with a signed
-//                   distance function, so corners and borders stay smooth at any size;
-//   mode 1 (glyph): coverage sampled from the single-channel atlas (font glyphs).
-// Colors arrive in sRGB, as written in UI themes, and are converted to linear here so blending
-// and the sRGB surface agree with how the colors were chosen.
+// 2D overlay (UI and gizmos): each instance is one shape in pixel coordinates, origin top-left.
+//   mode 0 (shape):    a rounded rectangle, filled or outlined
+//   mode 1 (glyph):    coverage sampled from the single-channel atlas (font glyphs)
+//   mode 2 (segment):  a thick line with rounded ends
+//   mode 3 (triangle): a filled triangle
+// Shapes are anti-aliased with signed distance functions (distance from the pixel to the
+// shape's edge), so edges stay smooth at any size with no extra geometry. Colors arrive in
+// sRGB, as written in UI themes, and are converted to linear here so blending and the sRGB
+// surface agree with how the colors were chosen.
 
 @group(1) @binding(0) var atlas_texture: texture_2d<f32>;
 @group(1) @binding(1) var atlas_sampler: sampler;
@@ -13,12 +16,18 @@ struct Vertex_Output {
 	@location(0) pixel_position: vec2f,
 	@location(1) uv: vec2f,
 	@location(2) color: vec4f,
-	@location(3) @interpolate(flat) rect_min: vec2f,
-	@location(4) @interpolate(flat) rect_max: vec2f,
+	@location(3) @interpolate(flat) point_a: vec2f, // rect_min, segment start, triangle corner
+	@location(4) @interpolate(flat) point_b: vec2f, // rect_max, segment end, triangle corner
 	@location(5) @interpolate(flat) corner_radius: f32,
-	@location(6) @interpolate(flat) border_width: f32,
+	@location(6) @interpolate(flat) border_width: f32, // segments: thickness
 	@location(7) @interpolate(flat) mode: u32,
+	@location(8) @interpolate(flat) point_c: vec2f, // triangle's third corner
 }
+
+const MODE_SHAPE: u32 = 0u;
+const MODE_GLYPH: u32 = 1u;
+const MODE_SEGMENT: u32 = 2u;
+const MODE_TRIANGLE: u32 = 3u;
 
 @vertex
 fn vertex_main(
@@ -37,7 +46,20 @@ fn vertex_main(
 		vec2f(0.0, 0.0), vec2f(1.0, 1.0), vec2f(0.0, 1.0),
 	);
 	let corner = corners[vertex_index];
-	let pixel_position = mix(rect_min, rect_max, corner);
+
+	// The quad to cover: the rectangle itself, or the bounding box of a segment or triangle
+	// grown by its half-thickness plus one pixel for the anti-aliased edge.
+	var quad_min = rect_min;
+	var quad_max = rect_max;
+	if (mode == MODE_SEGMENT) {
+		let margin = border_width * 0.5 + 1.0;
+		quad_min = min(rect_min, rect_max) - margin;
+		quad_max = max(rect_min, rect_max) + margin;
+	} else if (mode == MODE_TRIANGLE) {
+		quad_min = min(min(rect_min, rect_max), uv_min) - 1.0;
+		quad_max = max(max(rect_min, rect_max), uv_min) + 1.0;
+	}
+	let pixel_position = mix(quad_min, quad_max, corner);
 	// Pixels (y down) to clip space (y up).
 	let normalized = pixel_position / frame.viewport_size;
 
@@ -46,11 +68,12 @@ fn vertex_main(
 	output.pixel_position = pixel_position;
 	output.uv = mix(uv_min, uv_max, corner);
 	output.color = color;
-	output.rect_min = rect_min;
-	output.rect_max = rect_max;
+	output.point_a = rect_min;
+	output.point_b = rect_max;
 	output.corner_radius = corner_radius;
 	output.border_width = border_width;
 	output.mode = mode;
+	output.point_c = uv_min;
 	return output;
 }
 
@@ -59,6 +82,33 @@ fn vertex_main(
 fn rounded_box_distance(position: vec2f, half_size: vec2f, radius: f32) -> f32 {
 	let corner_offset = abs(position) - half_size + radius;
 	return length(max(corner_offset, vec2f(0.0))) + min(max(corner_offset.x, corner_offset.y), 0.0) - radius;
+}
+
+// Distance from `position` to the segment start..end (unsigned).
+fn segment_distance(position: vec2f, start: vec2f, end: vec2f) -> f32 {
+	let along = end - start;
+	let from_start = position - start;
+	let fraction = clamp(dot(from_start, along) / max(dot(along, along), 1e-6), 0.0, 1.0);
+	return length(from_start - along * fraction);
+}
+
+// Signed distance to a triangle: negative inside (Inigo Quilez's sdTriangle).
+fn triangle_distance(position: vec2f, corner_0: vec2f, corner_1: vec2f, corner_2: vec2f) -> f32 {
+	let edge_0 = corner_1 - corner_0;
+	let edge_1 = corner_2 - corner_1;
+	let edge_2 = corner_0 - corner_2;
+	let to_0 = position - corner_0;
+	let to_1 = position - corner_1;
+	let to_2 = position - corner_2;
+	let nearest_0 = to_0 - edge_0 * clamp(dot(to_0, edge_0) / dot(edge_0, edge_0), 0.0, 1.0);
+	let nearest_1 = to_1 - edge_1 * clamp(dot(to_1, edge_1) / dot(edge_1, edge_1), 0.0, 1.0);
+	let nearest_2 = to_2 - edge_2 * clamp(dot(to_2, edge_2) / dot(edge_2, edge_2), 0.0, 1.0);
+	let winding = sign(edge_0.x * edge_2.y - edge_0.y * edge_2.x);
+	let distances = min(min(
+		vec2f(dot(nearest_0, nearest_0), winding * (to_0.x * edge_0.y - to_0.y * edge_0.x)),
+		vec2f(dot(nearest_1, nearest_1), winding * (to_1.x * edge_1.y - to_1.y * edge_1.x))),
+		vec2f(dot(nearest_2, nearest_2), winding * (to_2.x * edge_2.y - to_2.y * edge_2.x)));
+	return -sqrt(distances.x) * sign(distances.y);
 }
 
 fn srgb_to_linear(srgb: vec3f) -> vec3f {
@@ -73,9 +123,9 @@ fn fragment_main(fragment: Vertex_Output) -> @location(0) vec4f {
 	let glyph_coverage = textureSample(atlas_texture, atlas_sampler, fragment.uv).r;
 
 	var coverage = glyph_coverage;
-	if (fragment.mode == 0u) {
-		let half_size = (fragment.rect_max - fragment.rect_min) * 0.5;
-		let center = (fragment.rect_min + fragment.rect_max) * 0.5;
+	if (fragment.mode == MODE_SHAPE) {
+		let half_size = (fragment.point_b - fragment.point_a) * 0.5;
+		let center = (fragment.point_a + fragment.point_b) * 0.5;
 		let radius = min(fragment.corner_radius, min(half_size.x, half_size.y));
 		let distance = rounded_box_distance(fragment.pixel_position - center, half_size, radius);
 		coverage = clamp(0.5 - distance, 0.0, 1.0);
@@ -83,6 +133,12 @@ fn fragment_main(fragment: Vertex_Output) -> @location(0) vec4f {
 			// Outline: keep only the band between the outer edge and the edge shrunk inward.
 			coverage *= clamp(0.5 + distance + fragment.border_width, 0.0, 1.0);
 		}
+	} else if (fragment.mode == MODE_SEGMENT) {
+		let distance = segment_distance(fragment.pixel_position, fragment.point_a, fragment.point_b) - fragment.border_width * 0.5;
+		coverage = clamp(0.5 - distance, 0.0, 1.0);
+	} else if (fragment.mode == MODE_TRIANGLE) {
+		let distance = triangle_distance(fragment.pixel_position, fragment.point_a, fragment.point_b, fragment.point_c);
+		coverage = clamp(0.5 - distance, 0.0, 1.0);
 	}
 
 	let linear_color = srgb_to_linear(fragment.color.rgb);

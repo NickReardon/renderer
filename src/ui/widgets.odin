@@ -39,15 +39,87 @@ area_rect :: proc(state: ^Ui_State, name: string) -> (rect_min, rect_max: [2]f32
 	return {box.x, box.y}, {box.x + box.width, box.y + box.height}, true
 }
 
+// Like flexible_space, but a container: content inside it (a toolbar) is laid over the area.
+// The area itself doesn't take the mouse; the 3D view underneath keeps it.
+@(deferred_none = close_element)
+area :: proc(state: ^Ui_State, name: string) -> bool {
+	clay._OpenElementWithId(clay.ID(name))
+	clay.ConfigureOpenElement({
+		layout = {
+			sizing          = {width = clay.SizingGrow(), height = clay.SizingGrow()},
+			padding         = clay.PaddingAll(points_u16(state, 8)),
+			childGap        = points_u16(state, CHILD_GAP),
+			layoutDirection = .TopToBottom,
+		},
+	})
+	return true
+}
+
+// A compact row of controls, e.g. over the 3D view. It takes the mouse like a panel, so a
+// click on it never reaches the view underneath.
+@(deferred_none = close_element)
+toolbar :: proc(state: ^Ui_State, id_text: string) -> bool {
+	id := clay.ID_LOCAL(id_text)
+	register_mouse_area(state, id)
+	clay._OpenElementWithId(id)
+	clay.ConfigureOpenElement({
+		layout = {
+			sizing         = {width = clay.SizingFit(), height = clay.SizingFit()},
+			padding        = clay.PaddingAll(points_u16(state, 3)),
+			childGap       = points_u16(state, 2),
+			childAlignment = {y = .Center},
+		},
+		backgroundColor = state.theme.panel_background,
+		cornerRadius    = clay.CornerRadiusAll(points(state, CORNER_RADIUS + 2)),
+		border          = {color = state.theme.panel_border, width = clay.BorderOutside(points_u16(state, 1))},
+	})
+	return true
+}
+
+// A button that shows whether it's selected (tool buttons, mode switches). Sized to its label.
+toggle_button :: proc(state: ^Ui_State, label_text: string, selected: bool) -> (clicked: bool) {
+	id := clay.ID_LOCAL(label_text)
+	interaction := interact(state, id)
+	background: clay.Color
+	switch {
+	case selected:
+		background = state.theme.selection
+	case interaction.held && interaction.hovered:
+		background = state.theme.button_pressed
+	case interaction.hovered:
+		background = state.theme.button_hover
+	}
+	clay._OpenElementWithId(id)
+	clay.ConfigureOpenElement({
+		layout = {
+			sizing         = {width = clay.SizingFit(), height = clay.SizingFixed(points(state, ROW_HEIGHT))},
+			padding        = {left = points_u16(state, 10), right = points_u16(state, 10)},
+			childAlignment = {x = .Center, y = .Center},
+		},
+		backgroundColor = background,
+		cornerRadius    = clay.CornerRadiusAll(points(state, CORNER_RADIUS)),
+	})
+	text(state, label_text, .Semibold if selected else .Regular, FONT_SIZE, state.theme.text if selected || interaction.hovered else state.theme.text_dim)
+	clay._CloseElement()
+	return interaction.clicked
+}
+
+// Marks an element as UI for mouse routing: while the pointer is over it, the 3D view
+// doesn't get the mouse (ui.wants_mouse).
+@(private)
+register_mouse_area :: proc(state: ^Ui_State, id: clay.ElementId) {
+	if state.panel_count < MAX_PANELS {
+		state.panel_ids[state.panel_count] = id.id
+		state.panel_count += 1
+	}
+}
+
 // A full-height side panel with a title. Scrolls with the mouse wheel when its contents are
 // taller than the window.
 @(deferred_none = close_element)
 panel :: proc(state: ^Ui_State, title: string, width_points: f32) -> bool {
 	id := clay.ID(title)
-	if state.panel_count < MAX_PANELS {
-		state.panel_ids[state.panel_count] = id.id
-		state.panel_count += 1
-	}
+	register_mouse_area(state, id)
 	clay._OpenElementWithId(id)
 	clay.ConfigureOpenElement({
 		layout = {

@@ -38,7 +38,9 @@ Editor_State :: struct {
 }
 
 // Viewport mouse and keyboard handling. Runs after the UI has claimed what it wants.
-update_editor :: proc(memory: ^Game_Memory, input: ^platform.Input, viewport_has_mouse, viewport_has_keyboard: bool) {
+// `raw_input` is unfiltered (the gizmo keeps dragging over panels); `input` has the mouse and
+// keyboard removed when the UI owns them.
+update_editor :: proc(memory: ^Game_Memory, raw_input, input: ^platform.Input, viewport_has_mouse, viewport_has_keyboard: bool) {
 	editor := &memory.editor
 	scene := &memory.scene
 	left_mouse := input.mouse[.Left]
@@ -46,8 +48,15 @@ update_editor :: proc(memory: ^Game_Memory, input: ^platform.Input, viewport_has
 	ctrl_held := input.keys[.Left_Ctrl].down || input.keys[.Right_Ctrl].down
 	shift_held := input.keys[.Left_Shift].down || input.keys[.Right_Shift].down
 
-	// Clicks: Alt + left is orbiting, so only plain (or Shift/Ctrl) clicks select.
-	if viewport_has_mouse && left_mouse.pressed && !alt_held {
+	// The gizmo goes first: a press on a handle starts a drag instead of a selection click.
+	gizmo_was_dragging := memory.gizmo.active != .None
+	if update_gizmo(memory, raw_input if gizmo_was_dragging else input, viewport_has_mouse) {
+		editor.click_pending = false
+		if gizmo_was_dragging {
+			return // while dragging, the gizmo owns the mouse and Escape: no clicks or shortcuts
+		}
+	} else if viewport_has_mouse && left_mouse.pressed && !alt_held {
+		// Clicks: Alt + left is orbiting, so only plain (or Shift/Ctrl) clicks select.
 		editor.click_pending = true
 		editor.click_start_position = input.mouse_position
 	}
@@ -80,6 +89,13 @@ update_editor :: proc(memory: ^Game_Memory, input: ^platform.Input, viewport_has
 	}
 	if input.keys[.Escape].pressed {
 		clear_selection(scene)
+	}
+	// Unity's tool keys (Ctrl combinations are left for other shortcuts).
+	if !ctrl_held {
+		if input.keys[.Q].pressed do memory.gizmo.tool = .Hand
+		if input.keys[.W].pressed do memory.gizmo.tool = .Move
+		if input.keys[.E].pressed do memory.gizmo.tool = .Rotate
+		if input.keys[.R].pressed do memory.gizmo.tool = .Scale
 	}
 }
 

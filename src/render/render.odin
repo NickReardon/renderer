@@ -106,8 +106,10 @@ Overlay_Quad :: struct {
 #assert(size_of(Overlay_Quad) == 64)
 
 Overlay_Mode :: enum u32 {
-	Shape = 0,
-	Glyph = 1,
+	Shape    = 0, // rounded rectangle (rect_min..rect_max), filled or outlined
+	Glyph    = 1, // atlas texture (uv_min..uv_max) over the rectangle
+	Segment  = 2, // thick line from rect_min to rect_max, border_width thick, rounded ends
+	Triangle = 3, // filled triangle with corners rect_min, rect_max, uv_min
 }
 
 // A run of overlay quads that share one scissor rectangle.
@@ -365,6 +367,16 @@ overlay_glyph :: proc(renderer: ^Renderer, rect_min, rect_max, uv_min, uv_max: [
 		color    = color,
 		mode     = .Glyph,
 	})
+}
+
+// An anti-aliased line `thickness` pixels wide with rounded ends (gizmo axes, rings).
+overlay_segment :: proc(renderer: ^Renderer, start, end: [2]f32, thickness: f32, color: [4]f32) {
+	append_overlay_quad(renderer, {rect_min = start, rect_max = end, border_width = thickness, color = color, mode = .Segment})
+}
+
+// An anti-aliased filled triangle (gizmo arrowheads).
+overlay_triangle :: proc(renderer: ^Renderer, corner_a, corner_b, corner_c: [2]f32, color: [4]f32) {
+	append_overlay_quad(renderer, {rect_min = corner_a, rect_max = corner_b, uv_min = corner_c, color = color, mode = .Triangle})
 }
 
 // Clips the following overlay quads to a rectangle (pixels) until the next scissor change.
