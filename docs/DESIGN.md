@@ -529,6 +529,13 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   - Default is Pivot.
 - **Global / Local (X)** got Unity's key too. Local now takes the *active* object's axes rather
   than the first selected in pool order.
+- **The gizmo follows the drag** (feedback: it jumped to the new place on release). The drawn
+  gizmo now travels with a move, turns with a Local rotation, and stretches the dragged Scale
+  handle by the scale factor (Unity's look). It snaps back to normal length on release. The
+  centre of a rotation or scale stays where it was pressed, because it's the drag's fixed point.
+  Only the drawing changed: the drag is still solved from the origin and axes saved at the
+  press (`drag_origin`, `drag_axes`), with `drag_offset` and `drag_handle_stretch` recorded
+  just for display, so nothing feeds back into the maths and nothing drifts.
 - **Active object:** the one selected last (a click, a Hierarchy click, or Create), as in
   Unity. Stored as a handle in `Editor_State`, and checked on use: if it's no longer selected
   (Ctrl+click, Delete, undo, Ctrl+D), the first selected object stands in. That way nothing has

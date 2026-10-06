@@ -59,6 +59,8 @@ test_gizmo_move :: proc(test: ^testing.T) {
 	update_gizmo(memory, &drag, true)
 	entity := &memory.scene.entities[1]
 	testing.expectf(test, abs(entity.position.x - frame.world_length) < 1e-3 && abs(entity.position.y) < 1e-5 && abs(entity.position.z) < 1e-5, "moved along X only by one length, got %v", entity.position)
+	// The gizmo travels with the cube during the drag, not only after the release.
+	testing.expectf(test, linalg.length(compute_gizmo_frame(memory).origin - entity.position) < 1e-6, "the gizmo should follow the drag, at %v", compute_gizmo_frame(memory).origin)
 
 	// Back to the press point: back to the start (computed from the press, so no drift).
 	back := mouse_input(pixel_of(memory, frame, 0, 0.5), false, true)
@@ -94,6 +96,14 @@ test_gizmo_rotate :: proc(test: ^testing.T) {
 	update_gizmo(memory, &drag, true)
 	rotation := memory.scene.entities[1].rotation
 	testing.expectf(test, rotation.y > 30 && rotation.y < 150 && abs(rotation.x) < 1e-3 && abs(rotation.z) < 1e-3, "should rotate about Y only, positively, got %v", rotation)
+
+	// During the drag the centre stays put (it's the pivot); in Local mode the axes turn with
+	// the cube, so the gizmo's X axis is the cube's X axis.
+	memory.gizmo.local_orientation = true
+	dragging := compute_gizmo_frame(memory)
+	cube_x := (core.euler_rotation_matrix(rotation) * [4]f32{1, 0, 0, 0}).xyz
+	testing.expect(test, dragging.origin == frame.origin, "the rotation's centre doesn't move")
+	testing.expectf(test, linalg.length(dragging.axes[0] - cube_x) < 1e-5, "Local axes should turn with the cube: %v vs %v", dragging.axes[0], cube_x)
 }
 
 @(test)
@@ -110,11 +120,15 @@ test_gizmo_scale :: proc(test: ^testing.T) {
 	update_gizmo(memory, &drag, true)
 	scale := memory.scene.entities[1].scale
 	testing.expectf(test, abs(scale.x - 2) < 1e-3 && scale.y == 1 && scale.z == 1, "X scale should double, got %v", scale)
+	// The dragged handle stretches with it, as in Unity; the others keep their length.
+	stretch := compute_gizmo_frame(memory).handle_stretch
+	testing.expectf(test, abs(stretch.x - 2) < 1e-3 && stretch.y == 1 && stretch.z == 1, "the X handle should be drawn twice as long, got %v", stretch)
 
 	// Release ends the drag; the centre handle then scales uniformly (right = bigger).
 	release := mouse_input(pixel_of(memory, frame, 0, 1), false, false)
 	update_gizmo(memory, &release, true)
 	testing.expect_value(test, memory.gizmo.active, Gizmo_Part.None)
+	testing.expect_value(test, compute_gizmo_frame(memory).handle_stretch, [3]f32{1, 1, 1})
 	center_press := mouse_input(frame.origin_pixel, true, true)
 	update_gizmo(memory, &center_press, true)
 	testing.expect_value(test, memory.gizmo.active, Gizmo_Part.Center)

@@ -114,6 +114,9 @@ Gizmo_State :: struct {
 	drag_total_angle:  f32, // accumulated, so rotations past 180° keep going
 	drag_start_point:  [3]f32, // where the mouse ray met the plane (plane handles)
 	drag_view_axis:    [3]f32, // toward the viewer (the View ring's rotation axis)
+	// What the drag has done so far, for drawing the gizmo where the objects are:
+	drag_offset:         [3]f32, // Move: how far the objects have moved
+	drag_handle_stretch: [3]f32, // Scale: the factor on each axis
 	dragged:           [MAX_DRAGGED_ENTITIES]Dragged_Entity,
 	dragged_count:     int,
 }
@@ -130,6 +133,7 @@ Gizmo_Frame :: struct {
 	viewport_min:    [2]f32,
 	viewport_max:    [2]f32,
 	points_to_pixels: f32,
+	handle_stretch:  [3]f32,   // Scale handles' length multipliers: 1, except while dragging
 }
 
 toggle_handle_position :: proc(gizmo: ^Gizmo_State) {
@@ -182,8 +186,17 @@ compute_gizmo_frame :: proc(memory: ^Game_Memory) -> (frame: Gizmo_Frame) {
 			frame.axes[axis] = linalg.normalize((rotation * [4]f32{frame.axes[axis].x, frame.axes[axis].y, frame.axes[axis].z, 0}).xyz)
 		}
 	}
+	// While dragging, the gizmo follows what the drag does, as in Unity: it travels with a move,
+	// its axes turn with a Local rotation (they're the active object's, read above), and the
+	// dragged Scale handles stretch. The drag itself is solved from the values saved at the press
+	// (drag_origin, drag_axes), so none of this feeds back into it. The centre of a rotation or
+	// scale is the fixed point of the drag, so it stays where it was pressed.
+	frame.handle_stretch = {1, 1, 1}
 	if gizmo.active != .None {
-		frame.origin, frame.axes = gizmo.drag_origin, gizmo.drag_axes // stay put while dragging
+		frame.origin = gizmo.drag_origin + gizmo.drag_offset
+		if gizmo.tool == .Scale {
+			frame.handle_stretch = gizmo.drag_handle_stretch
+		}
 	}
 
 	frame.view_projection = viewport_view_projection(memory)
@@ -337,6 +350,8 @@ begin_gizmo_drag :: proc(memory: ^Game_Memory, frame: Gizmo_Frame, part: Gizmo_P
 		gizmo.drag_total_angle = 0
 	}
 
+	gizmo.drag_offset = {}
+	gizmo.drag_handle_stretch = {1, 1, 1}
 	gizmo.dragged_count = 0
 	for slot_index in 1 ..= scene.highest_entity_slot {
 		entity := &scene.entities[slot_index]
@@ -401,6 +416,7 @@ apply_gizmo_drag :: proc(memory: ^Game_Memory, frame: Gizmo_Frame, input: ^platf
 				entity.position = dragged.position + offset
 			}
 		}
+		gizmo.drag_offset = offset
 
 	case .Rotate:
 		// Accumulate the angle swept on screen (unwrapping across ±180°), then turn it into a
@@ -450,6 +466,12 @@ apply_gizmo_drag :: proc(memory: ^Game_Memory, frame: Gizmo_Frame, input: ^platf
 		}
 		if snapping {
 			factor = math.round(factor / SCALE_SNAP_STEP) * SCALE_SNAP_STEP
+		}
+		gizmo.drag_handle_stretch = {1, 1, 1}
+		if gizmo.active == .Center {
+			gizmo.drag_handle_stretch = {factor, factor, factor}
+		} else {
+			gizmo.drag_handle_stretch[axis] = factor
 		}
 		for dragged in gizmo.dragged[:gizmo.dragged_count] {
 			if entity, found := get_entity(scene, dragged.handle); found {
@@ -644,11 +666,17 @@ draw_gizmo :: proc(memory: ^Game_Memory, renderer: ^render.Renderer) {
 			tip_pixel, tip_visible := project_to_pixel(frame.view_projection, frame.viewport_min, frame.viewport_max, frame.origin + frame.axes[axis] * frame.world_length)
 			screen_length := linalg.length(tip_pixel - frame.origin_pixel)
 			if !tip_visible || screen_length < GIZMO_MIN_SCREEN_LENGTH_POINTS * scale {
-				continue
+				continue // judged at the normal length, so a handle squashed mid-drag stays drawn
+			}
+			direction := (tip_pixel - frame.origin_pixel) / screen_length
+			if frame.handle_stretch[axis] != 1 {
+				stretched_pixel, stretched_visible := project_to_pixel(frame.view_projection, frame.viewport_min, frame.viewport_max, frame.origin + frame.axes[axis] * frame.world_length * frame.handle_stretch[axis])
+				if stretched_visible {
+					tip_pixel = stretched_pixel
+				}
 			}
 			color := part_color(gizmo, parts[axis], axis_colors[axis])
 			render.overlay_segment(renderer, frame.origin_pixel, tip_pixel, line_width, color)
-			direction := (tip_pixel - frame.origin_pixel) / screen_length
 			if gizmo.tool == .Move {
 				// Arrowhead: a triangle continuing the line.
 				side := [2]f32{-direction.y, direction.x} * 6 * scale
