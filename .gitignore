@@ -19,3 +19,6 @@ build/
 .idea/
 *.swp
 .DS_Store
+
+# Screenshots saved when the engine runs from the repository root
+/screenshot.bmp

@@ -383,6 +383,38 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	testing.expect(test, state.edit_id == 0, "Escape should stop editing")
 	free_all(context.temp_allocator)
 
+	// --- In a window too short for the panel, tabbing to a box below the bottom edge scrolls
+	// the panel to show it, and wrapping back to the first box scrolls back up.
+	input.window_size.y = 140
+	next_input(&input)
+	commands = run_frame(state, &input, &model)
+	field_center, field_found = find_text(commands, "6.000")
+	testing.expect(test, field_found, "the number field should show at the top of the short panel")
+	press_mouse(&input, field_center)
+	run_frame(state, &input, &model)
+	release_mouse(&input)
+	run_frame(state, &input, &model)
+	press_key(&input, .Tab)
+	input.keys[.Left_Shift] = {down = true, pressed = true}
+	run_frame(state, &input, &model)
+	input.keys[.Left_Shift] = {}
+	expect_box_in_window :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input, model: ^Test_Model, shown: string, message: string) {
+		next_input(input)
+		run_frame(state, input, model) // the scroll applies at the start of the frame after the move
+		commands := run_frame(state, input, model)
+		center, found := find_text(commands, shown)
+		window_height := f32(input.window_size.y)
+		testing.expectf(test, found && center.y > 0 && center.y < window_height, "%s: %s should be in the window (found %v, y %.1f)", message, shown, found, center.y)
+	}
+	expect_box_in_window(test, state, &input, &model, "[9]", "Shift+Tab wrapping to a box below the edge")
+	press_key(&input, .Tab)
+	run_frame(state, &input, &model)
+	expect_box_in_window(test, state, &input, &model, "[6]", "Tab wrapping back to the top box")
+	press_key(&input, .Escape)
+	run_frame(state, &input, &model)
+	input.window_size.y = 800
+	free_all(context.temp_allocator)
+
 	// --- The mouse belongs to the viewport outside the panel, and to the UI over it.
 	move_mouse(&input, {100, 400})
 	run_frame(state, &input, &model)

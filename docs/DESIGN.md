@@ -514,4 +514,9 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   handled, so `focus_request = .Next` is left for it to pick up. Shift+Tab can start the
   previous box at once. Requests nobody picked up (Tab from the last box, Shift+Tab from the
   first) are resolved in `finish_layout` by wrapping to the first or last box.
+- **The box typed into is scrolled into view.** Every box takes part, including ones clipped
+  by a scrolled panel, so moving the typing sets `scroll_to_edit`. The next `begin_frame` reads
+  the box's position from the finished layout and moves the panel's Clay scroll position just
+  enough to show it. Reading last frame's layout costs one frame of delay; finding the box's
+  position mid-layout isn't possible, because Clay only positions elements in `EndLayout`.
 - Only number boxes take part; checkboxes and buttons have no keyboard focus yet.

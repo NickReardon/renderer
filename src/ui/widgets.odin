@@ -429,6 +429,41 @@ start_editing :: proc(state: ^Ui_State, field_id: u32, value: f32) {
 	initial_text := fmt.bprintf(state.edit_buffer[:], "%g", value)
 	state.edit_length = len(initial_text)
 	state.edit_all_selected = true
+	state.scroll_to_edit = true
+}
+
+// Scrolls the panel holding a widget (by element id) just far enough to show it whole. Panels
+// sit side by side, so the panel is the one whose horizontal span holds the widget. Positions
+// come from the last finished layout.
+@(private)
+scroll_box_into_view :: proc(state: ^Ui_State, box_id: u32) {
+	box := clay.GetElementData({id = box_id})
+	if !box.found {
+		return
+	}
+	box_center_x := box.boundingBox.x + box.boundingBox.width * 0.5
+	for panel_id in state.panel_ids[:state.panel_count] {
+		panel := clay.GetElementData({id = panel_id})
+		scroll := clay.GetScrollContainerData({id = panel_id})
+		if !panel.found || !scroll.found || scroll.scrollPosition == nil {
+			continue
+		}
+		panel_box := panel.boundingBox
+		if box_center_x < panel_box.x || box_center_x > panel_box.x + panel_box.width {
+			continue
+		}
+		// Clay's scroll position is the contents' offset: 0 at the top, negative scrolled down.
+		visible_top := panel_box.y + points(state, PANEL_PADDING)
+		visible_bottom := panel_box.y + panel_box.height - points(state, PANEL_PADDING)
+		box_top := box.boundingBox.y
+		box_bottom := box.boundingBox.y + box.boundingBox.height
+		if box_top < visible_top {
+			scroll.scrollPosition.y += visible_top - box_top
+		} else if box_bottom > visible_bottom {
+			scroll.scrollPosition.y -= box_bottom - visible_bottom
+		}
+		return
+	}
 }
 
 // Children laid out left to right, sharing the width. Use as an `if` block.

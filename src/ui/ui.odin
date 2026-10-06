@@ -58,6 +58,7 @@ Ui_State :: struct {
 	first_box_value:     f32,
 	previous_box_id:     u32, // last number box drawn so far this frame, and its value
 	previous_box_value:  f32,
+	scroll_to_edit:      bool, // typing just moved to a box: scroll its panel to show it
 
 	// Panels declared last frame, to tell whether the mouse is over the UI or the 3D viewport.
 	panel_ids:           [MAX_PANELS]u32,
@@ -125,6 +126,13 @@ begin_frame :: proc(state: ^Ui_State, input: ^platform.Input) {
 			state.mouse_over_panel = true
 			break
 		}
+	}
+	// Tab can move the typing to a box scrolled out of its panel. Scroll it back into view,
+	// using the box's position from last frame's layout, so it shows one frame after the move.
+	// This runs before UpdateScrollContainers, which clamps the result to the contents.
+	if state.scroll_to_edit {
+		state.scroll_to_edit = false
+		scroll_box_into_view(state, state.edit_id)
 	}
 	state.panel_count = 0
 
