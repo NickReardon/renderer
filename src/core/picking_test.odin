@@ -70,3 +70,22 @@ test_ray_mesh_intersection_through_a_transform :: proc(test: ^testing.T) {
 	_, hit = ray_mesh_intersection(ray_transformed({origin = {0, 5, 0}, direction = {1, 0, 0}}, linalg.inverse(world)), cube)
 	testing.expect(test, !hit, "a ray above the cube should miss")
 }
+
+@(test)
+test_ray_plane_intersection :: proc(test: ^testing.T) {
+	// The ground plane (normal +Y through y = 1), hit from above at a slant.
+	t, hit := ray_plane_intersection({origin = {0, 5, 0}, direction = {1, -2, 0}}, {0, 1, 0}, {0, 1, 0})
+	testing.expect(test, hit && abs(t - 2) < EPSILON, "a ray dropping 2 per unit should reach y = 1 at t = 2")
+	point := ray_point({origin = {0, 5, 0}, direction = {1, -2, 0}}, t)
+	testing.expect(test, linalg.length(point - [3]f32{2, 1, 0}) < EPSILON, "the hit point lies on the plane")
+
+	// Either side and any normal direction: the plane is two-sided.
+	t, hit = ray_plane_intersection({origin = {0, -3, 0}, direction = {0, 1, 0}}, {0, 1, 0}, {0, -1, 0})
+	testing.expect(test, hit && abs(t - 4) < EPSILON, "a ray from below hits too")
+
+	// Parallel rays and planes behind the ray miss.
+	_, hit = ray_plane_intersection({origin = {0, 5, 0}, direction = {1, 0, 0}}, {0, 1, 0}, {0, 1, 0})
+	testing.expect(test, !hit, "a ray parallel to the plane misses")
+	_, hit = ray_plane_intersection({origin = {0, 5, 0}, direction = {0, 1, 0}}, {0, 1, 0}, {0, 1, 0})
+	testing.expect(test, !hit, "a plane behind the ray misses")
+}
