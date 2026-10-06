@@ -473,6 +473,11 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
 - **One step per gesture.** Nothing is committed while the left button is held or a field has
   the keyboard, so a whole gizmo or number-field drag becomes one step, recorded on release.
   Escape during a gizmo drag restores the transforms, so the release finds nothing to record.
+  One exception: a number field applies typed text when the mouse is pressed elsewhere, so
+  that edit is finished while the button is down, and the same press can go on to click a
+  button or start a drag. `ui.typed_value_applied` reports it, and `game_update` records it as
+  its own step right after the UI pass. (Found in review: typing a Position value and then
+  clicking Create made one step, so Ctrl+Z removed the cube *and* reverted the value.)
 - **Selection:** a change of selection alone doesn't make a step (Unity records selection
   changes too; the history then fills with clicks). A step does store each touched entity's
   selection, and applying a step selects exactly the touched entities that were selected on

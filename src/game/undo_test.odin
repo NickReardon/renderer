@@ -202,3 +202,27 @@ test_undo_gizmo_drag_is_one_step :: proc(test: ^testing.T) {
 	undo(&memory.undo_history, &memory.scene)
 	testing.expect(test, entity.position == {0, 0, 0}, "one undo returns it to where the drag started")
 }
+
+// The review's case: type a Position value, then click Create. The press applies the typed value
+// (the UI reports it and game_update commits right after the UI pass); the cube is created on
+// release and committed at the end of that frame. Undo must remove only the cube.
+@(test)
+test_undo_typed_value_then_button_are_separate_steps :: proc(test: ^testing.T) {
+	test_data, first_handle, _ := make_undo_test()
+	defer free(test_data)
+	scene, history := &test_data.scene, &test_data.history
+
+	// Press frame: the field applies its value (mouse down, so the end-of-frame commit is skipped).
+	first, _ := get_entity(scene, first_handle)
+	first.position.x = 4
+	commit_undo_step(history, scene) // game_update: ui.typed_value_applied
+	// Release frame: the button creates a cube; the end-of-frame commit records it.
+	cube_handle := create_primitive_entity(scene, .Cube, {}, {1, 1, 1})
+	commit_undo_step(history, scene)
+
+	undo(history, scene)
+	_, cube_found := get_entity(scene, cube_handle)
+	testing.expect(test, !cube_found && first.position.x == 4, "the first undo removes only the cube")
+	undo(history, scene)
+	testing.expect(test, first.position.x == 0, "the second undo reverts the typed value")
+}

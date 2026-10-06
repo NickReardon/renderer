@@ -43,6 +43,7 @@ Ui_State :: struct {
 	active_id:           u32, // widget that the mouse was pressed on and is still held
 	edit_id:             u32, // number field receiving typed text
 	editing_at_frame_start: bool,
+	typed_value_applied: bool, // a number field applied typed text this frame (see typed_value_applied)
 	edit_buffer:         [MAX_EDIT_BYTES]u8,
 	edit_length:         int,
 	edit_all_selected:   bool, // the whole text is selected: typing replaces it
@@ -89,6 +90,7 @@ begin_frame :: proc(state: ^Ui_State, input: ^platform.Input) {
 	state.input = input^
 	state.scale = input.display_scale if input.display_scale > 0 else 1
 	state.editing_at_frame_start = state.edit_id != 0
+	state.typed_value_applied = false
 
 	// A widget only stays active while the mouse is held; this also frees the mouse if the
 	// active widget stopped being drawn.
@@ -179,6 +181,14 @@ wants_mouse :: proc(state: ^Ui_State) -> bool {
 // that ended editing, such as Escape, isn't also seen by the game).
 wants_keyboard :: proc(state: ^Ui_State) -> bool {
 	return state.edit_id != 0 || state.editing_at_frame_start
+}
+
+// True on the frame a number field applied typed text (Enter, or a click elsewhere). That edit
+// is finished even if the mouse is down: a click elsewhere applies it on the press, and the same
+// press may go on to start a new action. Undo records the typed edit as its own step on this
+// frame.
+typed_value_applied :: proc(state: ^Ui_State) -> bool {
+	return state.typed_value_applied
 }
 
 // Points to pixels.
