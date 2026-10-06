@@ -160,7 +160,9 @@ the wgpu surface from them. That keeps SDL out of the renderer and wgpu out of t
   fails with "Invalid ODIN_ROOT".
 - **Batch files must have CRLF line endings,** or `goto` labels can break (`.gitattributes`
   enforces this). Editing `build.bat` with `sed` from the Bash tool can drop the CRs; check with
-  `file build.bat` and restore them with `sed -i 's/*$//' build.bat`.
+  `file build.bat` and restore them with `sed -i 's/\r*$/\r/' build.bat`.
+*$/
+/' build.bat`.
 - **Untyped float constants default to `f64`** when assigned with `:=`. Declare `f32`
   explicitly when the value is mixed with `[3]f32` math.
 - **Appending to `#soa[dynamic]T` needs a typed literal:** `append(&ps, Particle{...})`.
