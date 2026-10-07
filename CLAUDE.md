@@ -164,12 +164,17 @@ issue is where work is claimed and handed over:
 - **Claim it:** add the `in-progress` label and comment the branch name
   (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`).
 - **Docs first, merged before the work.** For work with design choices (features, architecture),
-  write the planned design on its own `docs/<n>-<name>` branch and open a PR. In it, add a
-  section to `docs/DESIGN.md` (until #26 splits it): what will be built, the options and the
-  choice. Get it merged to `main` before starting the implementation, so the plan is reviewed
-  and every agent reads the same intended design. The implementation branch starts from that
-  `main`, and its PR updates the doc to match what was actually built. Plain bug fixes and
-  trivial changes don't need a docs PR.
+  write a first pass of the design on its own `docs/<n>-<name>` branch and open a PR:
+  - **high level, preferably:** what we intend to build and why, the main choice and the options
+    considered. Details are worked out during the work;
+  - in a section of `docs/DESIGN.md` (until #26 splits it), starting with a status line
+    naming the branch that will do the work: **WIP, in branch `feature/<n>-<name>`**.
+
+  Get it merged to `main` before starting the implementation, so the plan is reviewed and
+  every agent reads the same intended design (and sees which branch has it). The
+  implementation branch starts from that `main`; its PR updates the doc to match what was
+  actually built, with the detail that only became clear while building, and removes the WIP
+  line. Plain bug fixes and trivial changes don't need a docs PR.
 - **Name the branch with the issue number:** `docs/<n>-<name>` for the design, then
   `feature/<n>-<name>` or `fix/<n>-<name>` for the work.
 - **Write `Fixes #<n>` in the implementation pull request,** so merging it closes the issue (the
