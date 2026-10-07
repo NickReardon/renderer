@@ -170,8 +170,8 @@ issue is where work is claimed and handed over:
   - in a section of `docs/DESIGN.md` (until #26 splits it), starting with a status line
     naming the branch that will do the work: **WIP, in branch `feature/<n>-<name>`**.
 
-  Get it merged to `main` before starting the implementation, so the plan is reviewed and
-  every agent reads the same intended design (and sees which branch has it). The
+  Wait for the owner to approve and merge it before starting the implementation, so the plan
+  is reviewed and every agent reads the same intended design (and sees which branch has it). The
   implementation branch starts from that `main`; its PR updates the doc to match what was
   actually built, with the detail that only became clear while building, and removes the WIP
   line. Plain bug fixes and trivial changes don't need a docs PR.
@@ -183,7 +183,11 @@ issue is where work is claimed and handed over:
   and remove the `in-progress` label, so the next agent can pick it up.
 - **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
   GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears.
-- On one machine, give each agent its own git worktree, so they don't share a working directory.
+- **The main checkout (`D:\Renderer`) stays on `main`;** it's for reading and pulling. Every
+  task, docs PRs included, runs in its own git worktree under `.claude/worktrees/`
+  (`git worktree add .claude/worktrees/<branch> -b <branch> origin/main`), so no session ever
+  switches branches under another one. Don't `git switch` in the main checkout, and remove a
+  task's worktree once its PR is merged (`git worktree remove`).
 
 ## How to work
 
