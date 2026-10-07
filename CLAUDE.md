@@ -6,7 +6,7 @@ also a learning project: the owner wants to understand data-oriented, procedural
 immediate-mode design, so code must be easy to read and every non-obvious decision explained.
 
 Read `docs/STYLE.md` for the full rules and reasoning, `docs/DESIGN.md` for past decisions, and
-`docs/REFERENCES.md` for sources.
+`docs/REFERENCES.md` for sources. Planned work is tracked in GitHub Issues (see below).
 
 ## Build and run (Windows)
 
@@ -152,6 +152,25 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
   their email. Don't change `user.email`.
 - **`gh` is at `C:\Program Files\GitHub CLI\gh.exe`;** it may not be on the Bash tool's PATH.
 
+## Planned work: GitHub Issues
+
+Work that hasn't started is tracked as GitHub Issues
+(https://github.com/NickReardon/renderer/issues), one issue per unit of work, with what, why and
+roughly how. Several agents (and people) may work at once, on one machine or several, so the
+issue is where work is claimed and handed over:
+
+- **Before starting,** read the issue and its comments (`gh issue view <n> --comments`), and
+  check it isn't labeled `in-progress` (someone else has it).
+- **Claim it:** add the `in-progress` label and comment the branch name
+  (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`).
+- **Name the branch with the issue number:** `feature/<n>-<name>`, `fix/<n>-<name>`.
+- **Write `Fixes #<n>` in the pull request,** so merging it closes the issue.
+- **Stopping partway:** comment where things stand (what's done, what's failing, what's next)
+  and remove the `in-progress` label, so the next agent can pick it up.
+- **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
+  GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears.
+- On one machine, give each agent its own git worktree, so they don't share a working directory.
+
 ## How to work
 
 - **Build before saying a change is done,** and run `build.bat test` when `core/` or `ui/` changed.
@@ -163,6 +182,12 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
   learning these techniques. Record real design decisions (choices between alternatives) in
   `docs/DESIGN.md`.
 - **Keep changes to one milestone at a time;** don't build ahead of what was asked.
+- **Ideas outside the current branch's scope become GitHub issues,** not part of the branch:
+  recommend them, file an issue (what, why, roughly how, an `area:` label), and keep the branch
+  to its milestone. Creating issues is fine; working on them waits for the owner.
+- **Prefer designs that hot-reload.** Avoid changing `src/host/`, `src/platform/` types, the
+  exported `game_*` procedures or `Game_Memory`'s layout when a game-side design works; when
+  one must change, say which reload level it needs (hot reload, F6 restart, full relaunch).
 - **Cite sources** in comments for non-obvious algorithms (see `docs/REFERENCES.md`).
 - **Entity model: hybrid fat struct** (`docs/STYLE.md` §15):
   - one `Entity` struct in a fixed pool with `Entity_Handle { index, generation }`; slot 0 is
