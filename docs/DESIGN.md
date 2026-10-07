@@ -825,6 +825,11 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   the text it would check is typed during the call. A parameter called inside `text_box` (with a
   `rawptr` for the caller's data: here the scene and the object) is like a sort's comparison
   procedure; hard rule 3 forbids procedure *fields* used as virtual methods, not this.
+- **Finding the next free number in one pass** (found in review by Codex). The box checks every
+  frame, and the first `unique_entity_name` scanned the scene once per candidate suffix: with a
+  thousand "Cube (N)" objects, about a million comparisons a frame. Now one pass marks which
+  numbers are taken and the smallest free one is used. Rejected: caching the result until the
+  text or scene changes, which would need state kept between frames for one widget.
 - **Hot reload:** nothing here changes `Game_Memory`, the host or the platform types. The error
   colour is a constant (`TEXT_ERROR_COLOR`) rather than a `Theme` field, which would have changed
   `Ui_State`'s layout and forced a restart.

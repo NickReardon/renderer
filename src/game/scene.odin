@@ -205,15 +205,54 @@ entity_world_matrix :: proc(entity: ^Entity) -> matrix[4, 4]f32 {
 // "Cube (3) (1)". Every candidate is built to fit the 48-byte name buffer (the base is shortened
 // to leave room for the suffix), so uniqueness is checked on the name exactly as it will be
 // stored.
+//
+// One pass over the scene marks which numbers are taken (0 is the name without a suffix), then
+// the smallest free one is used. Testing each candidate against the whole scene in turn would
+// cost a scan per candidate: with a thousand "Cube (N)" objects, about a million name
+// comparisons, every frame while the rename box checks a taken name (found in review of #24).
 unique_entity_name :: proc(scene: ^Scene, requested_name: string, excluding: Entity_Handle = {}) -> string {
 	base_name := strip_number_suffix(requested_name)
-	for number := 0; ; number += 1 {
-		suffix := fmt.tprintf(" (%d)", number) if number > 0 else ""
-		candidate := fmt.tprintf("%s%s", truncate_utf8(base_name, ENTITY_NAME_BYTES - len(suffix)), suffix)
-		if !entity_name_in_use(scene, candidate, excluding) {
-			return candidate
+	// Fewer than MAX_ENTITIES other entities can take fewer than MAX_ENTITIES numbers, so one
+	// below MAX_ENTITIES is always free.
+	taken: [MAX_ENTITIES]bool
+	unsuffixed := truncate_utf8(base_name, ENTITY_NAME_BYTES)
+	for slot_index in 1 ..= scene.highest_entity_slot {
+		entity := &scene.entities[slot_index]
+		if !(.Alive in entity.flags) || slot_index == int(excluding.index) {
+			continue
+		}
+		name := entity_name(entity)
+		if name == unsuffixed {
+			taken[0] = true
+			continue
+		}
+		// Is this name candidate N? Only if it's written exactly as a candidate would be: digits
+		// without a leading zero ("Cube (01)" isn't "Cube (1)"), after the base shortened for
+		// that suffix's length.
+		name_base := strip_number_suffix(name)
+		if name_base == name {
+			continue
+		}
+		digits := name[len(name_base) + 2:len(name) - 1] // between " (" and ")"
+		if len(digits) > 4 || digits[0] == '0' { // MAX_ENTITIES has 4 digits
+			continue
+		}
+		number := 0
+		for digit in digits {
+			number = number * 10 + int(digit - '0')
+		}
+		suffix_length := len(digits) + 3 // " (" and ")"
+		if number < MAX_ENTITIES && name_base == truncate_utf8(base_name, ENTITY_NAME_BYTES - suffix_length) {
+			taken[number] = true
 		}
 	}
+	for number in 0 ..< MAX_ENTITIES {
+		if !taken[number] {
+			suffix := fmt.tprintf(" (%d)", number) if number > 0 else ""
+			return fmt.tprintf("%s%s", truncate_utf8(base_name, ENTITY_NAME_BYTES - len(suffix)), suffix)
+		}
+	}
+	unreachable()
 }
 
 // Names: letters (any script), digits, spaces and _ - . ( ). Kept to these so a name can later

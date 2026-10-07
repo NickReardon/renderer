@@ -2,6 +2,7 @@
 // Run with `build.bat test`.
 package game
 
+import "core:fmt"
 import "core:strings"
 import "core:testing"
 
@@ -37,6 +38,24 @@ test_unique_names :: proc(test: ^testing.T) {
 	testing.expect_value(test, unique_entity_name(scene, "Cube (1)"), "Cube (2)")
 	// Parentheses that aren't a number suffix are part of the name.
 	testing.expect_value(test, strip_number_suffix("Lamp (old)"), "Lamp (old)")
+	// The smallest free number is used, so a gap is filled.
+	create_entity(scene, "Cube (3)")
+	testing.expect_value(test, unique_entity_name(scene, "Cube"), "Cube (2)")
+	// Only a suffix written as a candidate would be takes a number: "Cube (02)" isn't "Cube (2)".
+	create_entity(scene, "Cube (02)")
+	testing.expect_value(test, unique_entity_name(scene, "Cube"), "Cube (2)")
+	// A base that itself ends in a number suffix: "Box (1)" is its unsuffixed candidate.
+	create_entity(scene, "Box (1)")
+	testing.expect_value(test, unique_entity_name(scene, "Box (1) (5)"), "Box (1) (1)")
+	// The entity being renamed doesn't take its own name.
+	own_handle, _ := create_entity(scene, "Lamp")
+	testing.expect_value(test, unique_entity_name(scene, "Lamp", own_handle), "Lamp")
+	// Many numbered names: the next one after them all.
+	for number in 4 ..< 1000 {
+		create_entity(scene, fmt.tprintf("Cube (%d)", number))
+	}
+	create_entity(scene, "Cube (2)")
+	testing.expect_value(test, unique_entity_name(scene, "Cube (500)"), "Cube (1000)")
 
 	// A name at the 48-byte limit: repeated duplication must still give distinct names, all of
 	// which fit the buffer exactly as checked.
