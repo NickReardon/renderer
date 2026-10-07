@@ -49,7 +49,7 @@ Camera :: struct {
 Frame_Settings :: struct {
 	clear_color:     [4]f32,   // linear
 	show_grid:       bool,
-	grid_plane:      Grid_Plane,
+	grid_opacity:    [Grid_Plane]f32, // each plane's opacity; 0 skips it
 	capture:         bool,     // read this frame back to the CPU; end_frame returns the pixels
 	render_scale:    f32,      // scene resolution / viewport resolution, MIN..MAX_RENDER_SCALE; 0 = 1
 	upscaler:        Upscaler, // used when render_scale < 1
@@ -59,8 +59,9 @@ Frame_Settings :: struct {
 	msaa_samples:    u32,      // 1 (off) or 4; anything else means 1
 }
 
-// The world plane the grid lies in, through the origin. XZ is the ground; the editor uses XY and
-// YZ for orthographic side views, where the ground is seen edge-on. Must match grid.wgsl.
+// The world planes a grid can lie in, through the origin. XZ is the ground; the editor fades in
+// XY and YZ for orthographic side views, where the ground is seen edge-on. The order must match
+// grid.wgsl (one instance per plane).
 Grid_Plane :: enum u32 {
 	XZ,
 	XY,
@@ -94,11 +95,12 @@ Frame_Uniforms :: struct {
 	camera_position: [3]f32,
 	gamma_correct:   f32,
 	light_direction: [3]f32,
-	grid_plane:      Grid_Plane,
+	padding:         f32,
 	viewport_size:   [2]f32, // pixels
 	padding_2:       [2]f32,
+	grid_opacity:    [4]f32, // per Grid_Plane (XZ, XY, YZ); w unused
 }
-#assert(size_of(Frame_Uniforms) == 112)
+#assert(size_of(Frame_Uniforms) == 128)
 
 // One 2D overlay element in pixel coordinates (origin top-left): a rounded rectangle, a
 // rectangle outline, or a glyph sampled from the overlay atlas. Overlay colors are sRGB, as
@@ -521,7 +523,7 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		camera_position = camera.position,
 		gamma_correct   = 1 if renderer.gamma_correct else 0,
 		light_direction = linalg.normalize([3]f32{-0.4, -1, -0.3}),
-		grid_plane      = settings.grid_plane,
+		grid_opacity    = {settings.grid_opacity[.XZ], settings.grid_opacity[.XY], settings.grid_opacity[.YZ], 0},
 		viewport_size   = surface_size,
 	}
 	wgpu.QueueWriteBuffer(renderer.queue, renderer.frame_buffer, 0, &frame_uniforms, size_of(frame_uniforms))
@@ -697,8 +699,9 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		// The grid is transparent, so it goes last, depth-tested against everything opaque.
 		if renderer.grid_pipeline != nil && settings.show_grid {
 			wgpu.RenderPassEncoderSetPipeline(scene_pass, renderer.grid_pipeline)
+			// One instance per Grid_Plane; the shader collapses planes with zero opacity.
 			wgpu.RenderPassEncoderSetBindGroup(scene_pass, 0, renderer.frame_group)
-			wgpu.RenderPassEncoderDraw(scene_pass, vertexCount = 6, instanceCount = 1, firstVertex = 0, firstInstance = 0)
+			wgpu.RenderPassEncoderDraw(scene_pass, vertexCount = 6, instanceCount = len(Grid_Plane), firstVertex = 0, firstInstance = 0)
 		}
 
 		wgpu.RenderPassEncoderEnd(scene_pass)

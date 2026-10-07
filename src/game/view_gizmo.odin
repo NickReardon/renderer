@@ -20,6 +20,7 @@
 package game
 
 import "core:fmt"
+import "core:math"
 import "core:math/linalg"
 import "engine:platform"
 import "engine:render"
@@ -302,18 +303,24 @@ draw_view_gizmo :: proc(memory: ^Game_Memory, renderer: ^render.Renderer) {
 	ui.overlay_text(user_interface, renderer, (layout.label_min + layout.label_max) * 0.5, label, {0.86, 0.86, 0.88, 1}, .Regular, 11)
 }
 
-// The plane the grid lies in. Perspective always uses the ground. Orthographic keeps the ground
-// too unless it's seen nearly edge-on (less than 20° from the side): there, as in the side
-// views, it would be a thin smear or invisible, so the grid moves to the vertical plane the view
-// faces most: XY for Front and Back, YZ for Right and Left.
-grid_plane_for_view :: proc(camera: Viewport_Camera) -> render.Grid_Plane {
-	GROUND_MIN_SINE :: 0.342 // sin(20°)
-	if !viewport_camera_lens(camera).orthographic { // what's on screen, so not mid-switch
-		return .XZ
-	}
+// How strongly to draw each grid plane. Perspective draws the ground. Orthographic fades the
+// ground out as it turns edge-on (from 20° down to 8° above or below it), where it would be a
+// thin smear or invisible, and fades in the vertical planes instead, shared between XY (faced
+// from the Front or Back) and YZ (from the Right or Left) by which one the view faces more.
+// Every weight changes smoothly with the view, and the ground-to-vertical change also follows
+// the perspective <-> orthographic animation, so nothing ever switches abruptly: turning the
+// view cross-fades the grids. The weights always add up to 1.
+grid_opacity_for_view :: proc(camera: Viewport_Camera) -> (opacity: [render.Grid_Plane]f32) {
+	GROUND_FADED_OUT_SINE :: 0.139 // sin(8°)
+	GROUND_FULL_SINE      :: 0.342 // sin(20°)
 	toward_viewer := linalg.abs(viewport_camera_eye_direction(camera))
-	if toward_viewer.y >= GROUND_MIN_SINE {
-		return .XZ
-	}
-	return .XY if toward_viewer.z >= toward_viewer.x else .YZ
+	ground_in_orthographic := math.smoothstep(f32(GROUND_FADED_OUT_SINE), f32(GROUND_FULL_SINE), toward_viewer.y)
+	ground := math.lerp(f32(1), ground_in_orthographic, viewport_camera_lens(camera).orthographic_amount)
+	// 0 when the view faces the YZ plane (looking along X), 1 when it faces XY (along Z).
+	facing_xy := toward_viewer.z / max(toward_viewer.x + toward_viewer.z, 1e-6)
+	xy_share := math.smoothstep(f32(0.3), f32(0.7), facing_xy)
+	opacity[.XZ] = ground
+	opacity[.XY] = (1 - ground) * xy_share
+	opacity[.YZ] = (1 - ground) * (1 - xy_share)
+	return
 }

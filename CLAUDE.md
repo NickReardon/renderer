@@ -33,6 +33,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
                           --view=corner for the +X +Y +Z corner (isometric with --ortho)
   --switch-projection     start the animated switch to orthographic (capture it with
                           --screenshot-frame=N)
+  --camera=45,14          start at this yaw and pitch, in degrees
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't

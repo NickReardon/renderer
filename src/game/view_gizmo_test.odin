@@ -150,24 +150,52 @@ test_orthographic_ray_matches_projection :: proc(test: ^testing.T) {
 }
 
 @(test)
-test_grid_plane_for_view :: proc(test: ^testing.T) {
+test_grid_opacity_for_view :: proc(test: ^testing.T) {
+	matches :: proc(opacity: [render.Grid_Plane]f32, ground, xy, yz: f32) -> bool {
+		return abs(opacity[.XZ] - ground) < 1e-4 && abs(opacity[.XY] - xy) < 1e-4 && abs(opacity[.YZ] - yz) < 1e-4
+	}
 	camera := default_viewport_camera()
 	snap_viewport_camera(&camera, {0, 0, 1})
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // perspective: always the ground
+	testing.expect(test, matches(grid_opacity_for_view(camera), 1, 0, 0), "perspective: the ground, even from the front")
 	camera.orthographic = true
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XY) // Front
-	snap_viewport_camera(&camera, {0, 0, -1})
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XY) // Back
+	testing.expect(test, matches(grid_opacity_for_view(camera), 0, 1, 0), "Front: XY only")
 	snap_viewport_camera(&camera, {-1, 0, 0})
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.YZ) // Left
+	testing.expect(test, matches(grid_opacity_for_view(camera), 0, 0, 1), "Left: YZ only")
 	snap_viewport_camera(&camera, {0, 1, 0})
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // Top
+	testing.expect(test, matches(grid_opacity_for_view(camera), 1, 0, 0), "Top: the ground")
 	snap_viewport_camera(&camera, {1, 1, 1})
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // isometric: the ground, seen at 35°
-	snap_viewport_camera(&camera, {1, 0.3, 0.2})
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.YZ) // mostly from the side
-	snap_viewport_camera(&camera, {0.52, 0.42, 0.74}) // the default angle, 25° above the ground
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // ground: still readable
+	testing.expect(test, matches(grid_opacity_for_view(camera), 1, 0, 0), "isometric (35°): the ground")
+	snap_viewport_camera(&camera, {0.52, 0.42, 0.74})
+	testing.expect(test, matches(grid_opacity_for_view(camera), 1, 0, 0), "the default 25° angle: the ground")
+
+	// No jumps: orbiting in small steps over every angle never changes a weight by much, and the
+	// weights always add up to 1.
+	STEP_DEGREES :: 0.5
+	largest_change: f32 = 0
+	for pitch_step in 0 ..= int(90 / STEP_DEGREES) {
+		previous: [render.Grid_Plane]f32
+		for yaw_step in 0 ..= int(360 / STEP_DEGREES) {
+			camera.pitch = math.to_radians(f32(pitch_step) * STEP_DEGREES)
+			camera.yaw = math.to_radians(f32(yaw_step) * STEP_DEGREES)
+			opacity := grid_opacity_for_view(camera)
+			testing.expect(test, abs(opacity[.XZ] + opacity[.XY] + opacity[.YZ] - 1) < 1e-4, "weights add up to 1")
+			if yaw_step > 0 {
+				for plane in render.Grid_Plane {
+					largest_change = max(largest_change, abs(opacity[plane] - previous[plane]))
+				}
+			}
+			previous = opacity
+		}
+	}
+	testing.expectf(test, largest_change < 0.05, "a half-degree turn changes a grid's opacity by %.3f at most", largest_change)
+
+	// The perspective -> orthographic switch fades the side grid in with the animation.
+	camera.orthographic = false
+	snap_viewport_camera(&camera, {0, 0, 1})
+	switch_viewport_projection(&camera)
+	advance_viewport_camera(&camera, PROJECTION_SWITCH_SECONDS * 0.5)
+	midway := grid_opacity_for_view(camera)
+	testing.expect(test, midway[.XY] > 0.1 && midway[.XY] < 0.9, "half-way through the switch, the side grid is half faded in")
 }
 
 @(test)

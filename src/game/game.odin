@@ -141,6 +141,18 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 		case "--view=corner":
 			snap_viewport_camera(&game_memory.camera, {1, 1, 1})
 		}
+		// --camera=45,14: yaw and pitch in degrees, for views between the presets.
+		if strings.has_prefix(argument, "--camera=") {
+			angles := strings.split(argument[len("--camera="):], ",", context.temp_allocator)
+			if len(angles) == 2 {
+				yaw_degrees, yaw_parsed := strconv.parse_f32(angles[0])
+				pitch_degrees, pitch_parsed := strconv.parse_f32(angles[1])
+				if yaw_parsed && pitch_parsed {
+					game_memory.camera.yaw = math.to_radians(yaw_degrees)
+					game_memory.camera.pitch = math.to_radians(clamp(pitch_degrees, -90, 90))
+				}
+			}
+		}
 	}
 	return true
 }
@@ -279,7 +291,7 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	captured_pixels := render.end_frame(renderer, camera, {
 		clear_color     = {0.1, 0.105, 0.12, 1},
 		show_grid       = game_memory.show_grid,
-		grid_plane      = grid_plane_for_view(game_memory.camera) if game_memory.grid_follows_view else .XZ,
+		grid_opacity    = grid_opacity_for_view(game_memory.camera) if game_memory.grid_follows_view else {.XZ = 1, .XY = 0, .YZ = 0},
 		capture         = input.capture_requested,
 		render_scale    = game_memory.render_scale,
 		upscaler        = .Fsr if render_settings.use_fsr else .Bilinear,

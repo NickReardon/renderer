@@ -66,11 +66,12 @@ Camera_Lens :: struct {
 	orthographic:  bool,
 	tan_half_fov:  f32, // perspective only
 	eye_distance:  f32, // from the pivot; equals `distance` except mid-switch
+	orthographic_amount: f32, // 0 = the real perspective .. 1 = orthographic, for fading things with it
 }
 
 viewport_camera_lens :: proc(camera: Viewport_Camera) -> Camera_Lens {
 	if camera.projection_transition <= 0 {
-		return {orthographic = camera.orthographic, tan_half_fov = math.tan(camera.vertical_fov * 0.5), eye_distance = camera.distance}
+		return {orthographic = camera.orthographic, tan_half_fov = math.tan(camera.vertical_fov * 0.5), eye_distance = camera.distance, orthographic_amount = 1 if camera.orthographic else 0}
 	}
 	// How orthographic the view is: 0 = the real perspective, 1 = orthographic. Smoothstep is
 	// symmetric (s(1 - t) = 1 - s(t)), so switching back mid-way (switch_viewport_projection
@@ -78,7 +79,7 @@ viewport_camera_lens :: proc(camera: Viewport_Camera) -> Camera_Lens {
 	progress := math.smoothstep(f32(0), f32(1), 1 - camera.projection_transition)
 	orthographic_amount := progress if camera.orthographic else 1 - progress
 	tan_half_fov := math.lerp(math.tan(camera.vertical_fov * 0.5), math.tan(f32(NARROWEST_FOV_RADIANS) * 0.5), orthographic_amount)
-	return {orthographic = false, tan_half_fov = tan_half_fov, eye_distance = viewport_camera_half_height(camera) / tan_half_fov}
+	return {orthographic = false, tan_half_fov = tan_half_fov, eye_distance = viewport_camera_half_height(camera) / tan_half_fov, orthographic_amount = orthographic_amount}
 }
 
 // Fast at first, settling gently: 1 - (1 - t)³.

@@ -3,10 +3,11 @@
 // derivatives instead of drawn as geometry, so they stay one pixel sharp at any distance and
 // fade out before they alias.
 //
-// Normally the plane is the ground (XZ). Orthographic side views look at the ground edge-on, so
-// the editor switches the grid to the plane facing the view: XY for Front/Back, YZ for
-// Right/Left (frame.grid_plane). The shader works in 2D plane coordinates and only the plane's
-// two axes change.
+// It's drawn as one instance per plane (0 = XZ, the ground; 1 = XY; 2 = YZ), each faded by
+// frame.grid_opacity. Orthographic views that see the ground edge-on fade it out and fade in
+// the vertical plane facing the view (the editor picks the opacities), so turning the view
+// cross-fades the grids instead of switching them. The shader works in 2D plane coordinates;
+// only the plane's two world axes change.
 
 const GRID_EXTENT: f32 = 500.0; // half-size of the quad, in world units
 
@@ -17,11 +18,12 @@ const AXIS_Z_COLOR = vec3f(0.2, 0.4, 0.9);
 struct Vertex_Output {
 	@builtin(position) clip_position: vec4f,
 	@location(0) plane_position: vec2f, // coordinates along the plane's first and second axes
+	@location(1) @interpolate(flat) plane: u32,
 }
 
 // The world directions of the plane's two axes, as the columns of a 3x2 matrix.
-fn plane_axes() -> mat2x3f {
-	switch frame.grid_plane {
+fn plane_axes(plane: u32) -> mat2x3f {
+	switch plane {
 		case 1u: { return mat2x3f(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0)); } // XY
 		case 2u: { return mat2x3f(vec3f(0.0, 0.0, 1.0), vec3f(0.0, 1.0, 0.0)); } // YZ (z across, y up)
 		default: { return mat2x3f(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0)); } // XZ
@@ -29,20 +31,24 @@ fn plane_axes() -> mat2x3f {
 }
 
 @vertex
-fn vertex_main(@builtin(vertex_index) vertex_index: u32) -> Vertex_Output {
+fn vertex_main(@builtin(vertex_index) vertex_index: u32, @builtin(instance_index) plane: u32) -> Vertex_Output {
 	// Two triangles forming a large square, re-centred under the camera every frame so the
 	// grid never visibly ends.
 	var corners = array<vec2f, 6>(
 		vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
 		vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0),
 	);
-	let axes = plane_axes();
+	let axes = plane_axes(plane);
 	let camera_on_plane = frame.camera_position * axes; // (dot with first axis, dot with second)
 	let plane_position = camera_on_plane + corners[vertex_index] * GRID_EXTENT;
 	let world_position = axes * plane_position;
 	var output: Vertex_Output;
 	output.clip_position = frame.view_projection * vec4f(world_position, 1.0);
 	output.plane_position = plane_position;
+	output.plane = plane;
+	if (frame.grid_opacity[plane] <= 0.0) {
+		output.clip_position = vec4f(0.0); // collapsed: no pixels, no cost
+	}
 	return output;
 }
 
@@ -75,9 +81,9 @@ fn fragment_main(fragment: Vertex_Output) -> @location(0) vec4f {
 	// second coordinate is 0 runs along the first axis, and the other way round.
 	var first_axis_color = AXIS_X_COLOR;
 	var second_axis_color = AXIS_Z_COLOR;
-	if (frame.grid_plane == 1u) {
+	if (fragment.plane == 1u) {
 		second_axis_color = AXIS_Y_COLOR;
-	} else if (frame.grid_plane == 2u) {
+	} else if (fragment.plane == 2u) {
 		first_axis_color = AXIS_Z_COLOR;
 		second_axis_color = AXIS_Y_COLOR;
 	}
@@ -93,7 +99,8 @@ fn fragment_main(fragment: Vertex_Output) -> @location(0) vec4f {
 	alpha = max(alpha, on_second_axis * 0.9);
 
 	// Fade with distance so the far grid doesn't shimmer.
-	let distance_to_camera = length(fragment.plane_position - frame.camera_position * plane_axes());
+	let distance_to_camera = length(fragment.plane_position - frame.camera_position * plane_axes(fragment.plane));
+	alpha *= frame.grid_opacity[fragment.plane];
 	alpha *= 1.0 - smoothstep(GRID_EXTENT * 0.2, GRID_EXTENT * 0.8, distance_to_camera);
 
 	return vec4f(color, alpha); // linear; the sRGB scene target encodes it

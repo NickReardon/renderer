@@ -660,15 +660,18 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   depth is about 0.1 mm near depth 0.5.
 - **Selection outlines move along the view direction** in orthographic mode. They used to move
   toward the eye point, which in orthographic would also slide them sideways on screen.
-- **The grid faces orthographic side views.** The ground is edge-on (invisible) from the side,
-  so in orthographic, when the ground is seen at less than 20°, the grid moves to the vertical
-  plane the view faces most: XY for Front and Back, YZ for Right and Left (Unity does this in
-  its side views). Steeper views, isometric included, keep the ground; a first version used
-  "the plane faced most" everywhere and put a vertical grid in the default 25° view.
-  Perspective always uses the ground, where its horizon helps.
-  The renderer only takes a `Grid_Plane` in `Frame_Settings`; the shader works in 2D plane
-  coordinates and swaps the plane's two world axes and their colours. The choice is the
-  editor's, with a checkbox to keep the ground grid.
+- **The grid faces orthographic side views, by cross-fading.** The ground is edge-on (invisible)
+  from the side. In orthographic the renderer draws three grid planes (one instance each, through
+  the origin), and the editor gives each an opacity that changes smoothly with the view: the
+  ground fades out between 20° and 8° above or below it, and the vertical planes fade in,
+  shared between XY (faced from the Front or Back) and YZ (from the Right or Left) by which one
+  the view faces more. The ground-to-vertical change also follows the perspective ↔
+  orthographic animation. A first version switched planes at a threshold: correct in the
+  axis views, but orbiting across the threshold made the grid jump, which was jarring. A test
+  orbits over every angle in half-degree steps and checks no opacity moves by more than 0.05
+  and the weights always add up to 1. Perspective always uses the ground, where its horizon
+  helps. The renderer only takes `grid_opacity` per `Grid_Plane`; the shader works in 2D plane
+  coordinates, and collapses planes with zero opacity in the vertex shader.
 - **Not done:** no keyboard shortcuts for the views (Unity has none; Blender uses the numpad).
 - **Animated view changes, as in Unity.** View gizmo snaps and F move the camera over 0.3 s
   with an ease-out (fast start, so it feels responsive). A move is a start and a target pose
