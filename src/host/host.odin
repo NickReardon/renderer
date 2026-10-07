@@ -28,7 +28,7 @@ import "engine:platform"
 // Procedures exported by the game DLL as `game_<field name>`.
 Game_API :: struct {
 	init:           proc(window: platform.Native_Window, window_size: [2]i32, arguments: []string) -> bool,
-	update:         proc(input: ^platform.Input) -> bool,
+	update:         proc(input: ^platform.Input, output: ^platform.Output) -> bool,
 	shutdown:       proc(),
 	memory_pointer: proc() -> rawptr,
 	memory_size:    proc() -> int,
@@ -132,6 +132,17 @@ main :: proc() {
 
 	input: platform.Input
 	last_tick := time.tick_now()
+	output: platform.Output
+
+	// Mouse cursors the game can ask for (platform.Output.cursor), made once.
+	cursors := [platform.Cursor]^sdl.Cursor{
+		.Default = sdl.CreateSystemCursor(.DEFAULT),
+		.Text    = sdl.CreateSystemCursor(.TEXT),
+	}
+	defer for cursor in cursors {
+		sdl.DestroyCursor(cursor)
+	}
+	shown_cursor := platform.Cursor.Default
 
 	main_loop: for {
 		if screenshot_triggered {
@@ -168,6 +179,7 @@ main :: proc() {
 			handle_event(&input, event, pixel_density)
 		}
 		input.window_size = window_pixel_size(window)
+		read_clipboard_if_pasting(&input)
 		if screenshot_mode != .None {
 			// Scripted captures must be reproducible: ignore whatever the person at the computer
 			// does with the mouse and keyboard while the window is open.
@@ -177,14 +189,27 @@ main :: proc() {
 			input.mouse_delta = {}
 			input.wheel = 0
 			input.text_input_length = 0
+			input.clipboard_text_length = 0
 		}
 
 		now := time.tick_now()
 		input.delta_seconds = f32(time.duration_seconds(time.tick_diff(last_tick, now)))
 		last_tick = now
 
-		if !game.update(&input) {
+		output = {}
+		if !game.update(&input, &output) {
 			break main_loop
+		}
+		if output.set_clipboard {
+			text := string(output.clipboard_text[:output.clipboard_text_length])
+			if !sdl.SetClipboardText(strings.clone_to_cstring(text, context.temp_allocator)) {
+				fmt.eprintln("host: SDL_SetClipboardText failed:", sdl.GetError())
+			}
+		}
+		if output.cursor != shown_cursor && cursors[output.cursor] != nil {
+			if sdl.SetCursor(cursors[output.cursor]) {
+				shown_cursor = output.cursor
+			}
 		}
 		free_all(context.temp_allocator)
 		if input.capture_requested {
@@ -434,4 +459,26 @@ translate_scancode :: proc(scancode: sdl.Scancode) -> platform.Key {
 		return .Right_Alt
 	}
 	return .None
+}
+
+// Copies the clipboard's text into the input on frames where Ctrl+V is pressed (or repeats),
+// so the game can paste it. Only then: asking the OS for the clipboard can be slow. Text longer
+// than the buffer is cut on a character boundary.
+read_clipboard_if_pasting :: proc(input: ^platform.Input) {
+	input.clipboard_text_length = 0
+	ctrl_held := input.keys[.Left_Ctrl].down || input.keys[.Right_Ctrl].down
+	if !ctrl_held || !(input.keys[.V].pressed || input.keys[.V].repeated) {
+		return
+	}
+	clipboard := sdl.GetClipboardText()
+	if clipboard == nil {
+		return
+	}
+	defer sdl.free(clipboard)
+	text := string(cstring(clipboard))
+	length := min(len(text), len(input.clipboard_text))
+	for length < len(text) && length > 0 && (text[length] & 0xC0) == 0x80 {
+		length -= 1 // don't cut a UTF-8 character in half (continuation bytes are 10xxxxxx)
+	}
+	input.clipboard_text_length = copy(input.clipboard_text[:], text[:length])
 }

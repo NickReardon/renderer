@@ -20,6 +20,8 @@ package ui
 import "base:runtime"
 import "core:fmt"
 import "core:math/linalg"
+import "core:strings"
+import text_edit "core:text/edit"
 import fontstash "vendor:fontstash"
 import "engine:platform"
 import "engine:render"
@@ -44,11 +46,27 @@ Ui_State :: struct {
 	edit_id:             u32, // text or number box receiving typed text (see text_edit.odin)
 	editing_at_frame_start: bool,
 	typed_value_applied: bool, // a box applied typed text this frame (see typed_value_applied)
-	edit_buffer:         [MAX_EDIT_BYTES]u8,
-	edit_length:         int,
-	edit_maximum_bytes:  int, // the box's own limit, at most MAX_EDIT_BYTES
-	edit_caret:          int, // byte offset where typing goes
-	edit_anchor:         int, // other end of the selection; == edit_caret when nothing is selected
+	// The text being typed and its editing state (see text_edit.odin).
+	edit_buffer:         [MAX_EDIT_BYTES]u8, // storage for edit_builder
+	edit_builder:        strings.Builder,    // over edit_buffer[:the box's limit]: fixed capacity
+	edit_state:          text_edit.State,    // selection, undo and redo (core:text/edit)
+	edit_font:           Font,
+	edit_scroll_x:       f32, // pixels the text is scrolled left, to keep the caret in view
+	edit_blink_seconds:  f32, // since the caret last moved; it blinks from there
+	edit_caret_x:        [MAX_EDIT_BYTES + 1]f32, // x of each character boundary from the text's start
+	edit_drag_word:      [2]int, // the double-clicked word, while a drag extends by words
+
+	// Mouse clicks: 1 for a single press, 2 for a double-click, 3 for a triple-click.
+	clock_seconds:       f64,
+	last_press_seconds:  f64,
+	last_press_position: [2]f32,
+	click_count:         int,
+
+	// Requests for the host this frame (write_output).
+	cursor:              platform.Cursor,
+	clipboard_requested: bool,
+	clipboard_request:   [platform.MAX_CLIPBOARD_BYTES]u8,
+	clipboard_request_length: int,
 	drag_start_mouse_x:  f32,
 	drag_start_value:    f32,
 	drag_moved:          bool,
@@ -93,6 +111,11 @@ init :: proc(state: ^Ui_State, window_size: [2]i32) -> bool {
 }
 
 shutdown :: proc(state: ^Ui_State) {
+	if state.edit_id != 0 {
+		finish_text_edit(state)
+	}
+	refresh_edit_pointers(state)
+	text_edit.destroy(&state.edit_state)
 	fontstash.Destroy(&state.font_context)
 	delete(state.clay_memory)
 	state^ = {}
@@ -111,6 +134,19 @@ begin_frame :: proc(state: ^Ui_State, input: ^platform.Input) {
 	state.editing_at_frame_start = state.edit_id != 0
 	state.typed_value_applied = false
 	state.edit_widget_drawn = false
+	state.cursor = .Default
+	state.clipboard_requested = false
+	state.clock_seconds += f64(input.delta_seconds)
+	state.edit_blink_seconds += input.delta_seconds
+	// Count quick presses in the same place: the second is a double-click, the third a
+	// triple-click. Any press elsewhere or later starts over at 1.
+	if input.mouse[.Left].pressed {
+		quick := state.clock_seconds - state.last_press_seconds < DOUBLE_CLICK_SECONDS
+		near := linalg.length(input.mouse_position - state.last_press_position) <= points(state, DOUBLE_CLICK_POINTS)
+		state.click_count = min(state.click_count + 1, 3) if quick && near && state.click_count > 0 else 1
+		state.last_press_seconds = state.clock_seconds
+		state.last_press_position = input.mouse_position
+	}
 	state.first_box_id, state.first_box_value = 0, 0
 	state.previous_box_id, state.previous_box_value = 0, 0
 
@@ -193,7 +229,11 @@ end_frame :: proc(state: ^Ui_State, renderer: ^render.Renderer) {
 			} else {
 				render.overlay_clear_scissor(renderer)
 			}
-		case .None, .Image, .Custom, .OverlayColorStart, .OverlayColorEnd:
+		case .Custom:
+			// The only custom element is the text being edited (declare_edited_text).
+			clip := scissor_stack[min(scissor_depth, len(scissor_stack)) - 1] if scissor_depth > 0 else Clip_Rect{{0, 0}, window_size}
+			draw_edited_text(state, renderer, box_min, box_max, clip.minimum, clip.maximum)
+		case .None, .Image, .OverlayColorStart, .OverlayColorEnd:
 			// Not used yet.
 		}
 	}
@@ -263,7 +303,7 @@ finish_layout :: proc(state: ^Ui_State) -> clay.ClayArray(clay.RenderCommand) {
 	// A box that stops being drawn while it's typed into (its panel closed, or the object it
 	// showed went away) can't finish the edit, and would keep the keyboard forever. Drop it.
 	if state.edit_id != 0 && !state.edit_widget_drawn {
-		state.edit_id = 0
+		finish_text_edit(state)
 	}
 	// Tab from the last box, or Shift+Tab from the first: no box came after, so wrap around.
 	switch state.focus_request {
@@ -302,4 +342,14 @@ color_from_clay :: proc(color: clay.Color) -> [4]f32 {
 @(private)
 close_element :: proc() {
 	clay._CloseElement()
+}
+
+// Copies this frame's requests for the host (the mouse cursor's shape, text to put on the
+// clipboard) into the frame's output. Call after end_frame.
+write_output :: proc(state: ^Ui_State, output: ^platform.Output) {
+	output.cursor = state.cursor
+	if state.clipboard_requested {
+		output.set_clipboard = true
+		output.clipboard_text_length = copy(output.clipboard_text[:], state.clipboard_request[:state.clipboard_request_length])
+	}
 }
