@@ -142,7 +142,7 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
 - **For implementation and other code work,** commit on the task branch as you go, push it, and
   open a pull request with `gh pr create`. The description says what changed and why, how it was
   verified (build, tests, captures), and what's not done. End it with the Claude Code attribution
-  line. Design proposals use the GitHub-only process below.
+  line. Proposals are written in the issue, and docs-first PRs are made on GitHub (see below).
 - **Merge only after the build and all tests pass and the owner approves.** The repository
   allows **squash merges only** (`gh pr merge --squash`): each pull request becomes one commit on
   `main`, and GitHub deletes the branch. Afterwards, remove the task worktree, delete its local
@@ -162,30 +162,33 @@ issue is where work is claimed and handed over:
 
 - **Before starting,** read the issue and its comments (`gh issue view <n> --comments`), and
   check it isn't labeled `in-progress` (someone else has it).
+- **Design in the issue, approved before any work.** For work with design choices (features,
+  architecture), draft a high-level proposal in the issue: what we intend to build and why, the
+  main choice, and the options considered. Discuss it in the comments, and update the issue's
+  description as it settles. The owner approves it with a label that also picks the route:
+  - **`approved: implement`** (the usual case): build it, and put the docs in the same PR as
+    the code. They're written from what was actually built, so they start out true;
+  - **`approved: docs-first`** (large or cross-cutting designs): first a docs PR, then the
+    implementation. Use GitHub's web editor or API to create a `docs/<n>-<name>` branch and the
+    PR (not a local docs worktree, local file writes, or a push). Add a section to
+    `docs/DESIGN.md` (until #26 splits it) with **Status: Proposed** and a link to the issue.
+    Wait for the owner to approve and merge it; the implementation PR then fills in the detail
+    and sets the status to **Accepted**.
+
+  Without an `approved:` label, nobody starts the work. Plain bug fixes and trivial changes
+  skip the proposal. A design a later one replaces is marked **Superseded by …** (a link).
 - **Claim it:** add the `in-progress` label and comment that work has started
   (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`). Add the
-  docs or implementation branch name to the issue when that branch is created.
-- **Docs first, merged before implementation.** For work with design choices (features,
-  architecture), draft a high-level proposal in the GitHub issue: what we intend to build and
-  why, the main choice, and options considered. Discuss it there and get the owner's approval.
-  Then use GitHub's web editor or API to create a `docs/<n>-<name>` branch and docs PR. Edit the
-  proposal on GitHub; do not use a local docs worktree, local file writes, or a push for it.
-  Add a section to `docs/DESIGN.md` (until #26 splits it) with **Status: Proposed** and a link to
-  the issue. The issue tracks the discussion, owner, branches, and PRs.
-
-  Wait for the owner to approve and merge the docs PR before starting implementation, so every
-  agent reads the same intended design. The implementation branch starts from updated `main`;
-  its PR updates the design to match what was built, adds details learned during the work, and
-  sets the status to **Accepted**. A later replacement becomes **Superseded by …** (a link).
-  Plain bug fixes and trivial changes do not need this process.
-- **Name the branch with the issue number:** `docs/<n>-<name>` for the design, then
-  `feature/<n>-<name>` or `fix/<n>-<name>` for the work.
-- **Write `Fixes #<n>` in the implementation pull request,** so merging it closes the issue (the
-  docs PR says `Part of #<n>`).
+  branch name to the issue when the branch is created.
+- **Name the branch with the issue number:** `feature/<n>-<name>` or `fix/<n>-<name>` (and
+  `docs/<n>-<name>` for a docs-first PR).
+- **Write `Fixes #<n>` in the implementation pull request,** so merging it closes the issue (a
+  docs-first PR says `Part of #<n>`).
 - **Stopping partway:** comment where things stand (what's done, what's failing, what's next)
   and remove the `in-progress` label, so the next agent can pick it up.
 - **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
-  GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears.
+  GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears. Workflow
+  labels: `approved: implement`, `approved: docs-first` (set only by the owner) and `in-progress`.
 - **The main checkout (`D:\Renderer`) stays on `main`.** Pull GitHub `main` into it before
   creating a code worktree: `git -C D:/Renderer pull --ff-only origin main` (forward slashes:
   in the Bash tool a backslash is an escape, so `D:\Renderer` becomes `D:Renderer`). Create each
@@ -195,8 +198,8 @@ issue is where work is claimed and handed over:
   Before opening or updating a task PR, pull GitHub `main` into the main checkout again, merge
   that `main` into the task branch in its worktree, resolve conflicts, and rerun affected checks.
   Merge rather than rebase an already pushed task branch, so its history is not rewritten.
-  Remove the task worktree after its PR is merged (`git worktree remove`). Docs proposals use
-  GitHub directly as described above.
+  Remove the task worktree after its PR is merged (`git worktree remove`). Docs-first PRs are
+  made on GitHub directly, as described above.
 
 ## How to work
 
