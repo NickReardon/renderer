@@ -41,12 +41,14 @@ Ui_State :: struct {
 
 	// Interaction state
 	active_id:           u32, // widget that the mouse was pressed on and is still held
-	edit_id:             u32, // number field receiving typed text
+	edit_id:             u32, // text or number box receiving typed text (see text_edit.odin)
 	editing_at_frame_start: bool,
-	typed_value_applied: bool, // a number field applied typed text this frame (see typed_value_applied)
+	typed_value_applied: bool, // a box applied typed text this frame (see typed_value_applied)
 	edit_buffer:         [MAX_EDIT_BYTES]u8,
 	edit_length:         int,
-	edit_all_selected:   bool, // the whole text is selected: typing replaces it
+	edit_maximum_bytes:  int, // the box's own limit, at most MAX_EDIT_BYTES
+	edit_caret:          int, // byte offset where typing goes
+	edit_anchor:         int, // other end of the selection; == edit_caret when nothing is selected
 	drag_start_mouse_x:  f32,
 	drag_start_value:    f32,
 	drag_moved:          bool,
@@ -59,6 +61,7 @@ Ui_State :: struct {
 	previous_box_id:     u32, // last number box drawn so far this frame, and its value
 	previous_box_value:  f32,
 	scroll_to_edit:      bool, // typing just moved to a box: scroll its panel to show it
+	edit_widget_drawn:   bool, // the box in edit_id was drawn this frame (see finish_layout)
 
 	// Panels declared last frame, to tell whether the mouse is over the UI or the 3D viewport.
 	panel_ids:           [MAX_PANELS]u32,
@@ -107,6 +110,7 @@ begin_frame :: proc(state: ^Ui_State, input: ^platform.Input) {
 	state.scale = input.display_scale if input.display_scale > 0 else 1
 	state.editing_at_frame_start = state.edit_id != 0
 	state.typed_value_applied = false
+	state.edit_widget_drawn = false
 	state.first_box_id, state.first_box_value = 0, 0
 	state.previous_box_id, state.previous_box_value = 0, 0
 
@@ -208,7 +212,7 @@ wants_keyboard :: proc(state: ^Ui_State) -> bool {
 	return state.edit_id != 0 || state.editing_at_frame_start
 }
 
-// True on the frame a number field applied typed text (Enter, or a click elsewhere). That edit
+// True on the frame a text or number box applied typed text (Enter, Tab or a click elsewhere). That edit
 // is finished even if the mouse is down: a click elsewhere applies it on the press, and the same
 // press may go on to start a new action. Undo records the typed edit as its own step on this
 // frame.
@@ -256,6 +260,11 @@ interact :: proc(state: ^Ui_State, id: clay.ElementId) -> (result: Interaction) 
 // run frames without a renderer.
 @(private)
 finish_layout :: proc(state: ^Ui_State) -> clay.ClayArray(clay.RenderCommand) {
+	// A box that stops being drawn while it's typed into (its panel closed, or the object it
+	// showed went away) can't finish the edit, and would keep the keyboard forever. Drop it.
+	if state.edit_id != 0 && !state.edit_widget_drawn {
+		state.edit_id = 0
+	}
 	// Tab from the last box, or Shift+Tab from the first: no box came after, so wrap around.
 	switch state.focus_request {
 	case .Next:

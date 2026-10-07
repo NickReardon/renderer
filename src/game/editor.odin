@@ -13,9 +13,14 @@
 // A press only counts as a click if the mouse moved less than a few pixels before release, so
 // it never fights with dragging.
 //
-// Shortcuts (when the 3D view has the keyboard): Delete, Ctrl+D duplicate, F frame selection,
-// Escape clear selection, Q W E R tools, Z Pivot/Center, X Global/Local (Unity's keys). Ctrl+Z undo and Ctrl+Y / Ctrl+Shift+Z redo work wherever the mouse
-// is, except while typing in a field or in the middle of a drag.
+// Shortcuts (when no field is being typed into): Delete, Ctrl+D duplicate, F frame selection,
+// F2 rename, Escape clear selection, Q W E R tools, Z Pivot/Center, X Global/Local (Unity's
+// keys). Ctrl+Z undo and Ctrl+Y / Ctrl+Shift+Z redo work wherever the mouse is, except while
+// typing in a field or in the middle of a drag.
+//
+// Renaming (Unity's two ways): the name box at the top of the Inspector, or F2, which turns the
+// active object's Hierarchy row into a text box. Either way the name changes once, when typing
+// is applied, so undo records one step per rename (nothing in undo knows about names).
 package game
 
 import "core:fmt"
@@ -35,11 +40,14 @@ Editor_State :: struct {
 	create_section_open:  bool,
 	transform_section_open: bool,
 	active_entity:        Entity_Handle, // selected last; see active_selected_entity
+	renaming_entity:      Entity_Handle, // its Hierarchy row is a text box (F2); nil when not renaming
+	rename_starting:      bool,          // F2 was just pressed: the row's text box starts typing
 
 	// Developer flag --pick-center-of=<name>: once the viewport is laid out, click the pixel
 	// where that entity's centre appears, through the normal picking path.
 	developer_pick_name_bytes:  [ENTITY_NAME_BYTES]u8,
 	developer_pick_name_length: int,
+	developer_rename:           bool, // --rename: press F2 once the pick is done
 }
 
 // Viewport mouse and keyboard handling. Runs after the UI has claimed what it wants.
@@ -91,6 +99,10 @@ update_editor :: proc(memory: ^Game_Memory, raw_input, input: ^platform.Input, v
 	if editor.developer_pick_name_length > 0 && memory.viewport_max != {} {
 		developer_pick(memory)
 	}
+	if editor.developer_rename && editor.developer_pick_name_length == 0 && memory.viewport_max != {} {
+		editor.developer_rename = false
+		start_rename(memory)
+	}
 
 	if !viewport_has_keyboard || input.mouse[.Right].down { // right-drag flying uses WASD/QE
 		return
@@ -107,6 +119,9 @@ update_editor :: proc(memory: ^Game_Memory, raw_input, input: ^platform.Input, v
 	}
 	if input.keys[.F].pressed {
 		frame_selection(memory)
+	}
+	if input.keys[.F2].pressed {
+		start_rename(memory)
 	}
 	if input.keys[.Escape].pressed {
 		clear_selection(scene)
@@ -162,6 +177,18 @@ active_selected_entity :: proc(memory: ^Game_Memory) -> (handle: Entity_Handle, 
 	}
 	entity, _ = get_entity(scene, first)
 	return first, entity, true
+}
+
+// F2: rename the active object in its Hierarchy row. The row turns into a text box on the next
+// frame (the Hierarchy is drawn before shortcuts are handled), with the name selected.
+start_rename :: proc(memory: ^Game_Memory) {
+	handle, _, found := active_selected_entity(memory)
+	if !found {
+		return
+	}
+	memory.editor.renaming_entity = handle
+	memory.editor.rename_starting = true
+	memory.editor.hierarchy_open = true // the row must be visible to type into it
 }
 
 // Selects only this entity and makes it the active one (Create, a plain Hierarchy click).
@@ -402,6 +429,19 @@ draw_hierarchy_panel :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 				if !(.Alive in entity.flags) {
 					continue
 				}
+				handle := entity_handle(scene, slot_index)
+				if handle == editor.renaming_entity {
+					// F2 renaming: this row is a text box until typing is applied or cancelled.
+					new_name, result := ui.text_box(user_interface, "rename", entity_name(entity), ENTITY_NAME_BYTES, start_editing = editor.rename_starting)
+					editor.rename_starting = false
+					if result == .Applied {
+						set_entity_name(entity, new_name)
+					}
+					if result != .Editing {
+						editor.renaming_entity = {}
+					}
+					continue
+				}
 				interaction := ui.selectable(user_interface, entity_name(entity), .Selected in entity.flags, u32(slot_index))
 				if interaction.clicked {
 					if ctrl_held {
@@ -430,7 +470,10 @@ draw_selection_inspector :: proc(memory: ^Game_Memory) {
 		ui.label(user_interface, "Nothing selected. Click an object, or pick one in the Hierarchy.", .Regular)
 	case count == 1:
 		entity, _ := get_entity(scene, first)
-		ui.label(user_interface, entity_name(entity), .Semibold)
+		// The name, editable in place as in Unity's Inspector header.
+		if new_name, result := ui.text_box(user_interface, "Name", entity_name(entity), ENTITY_NAME_BYTES, .Semibold); result == .Applied {
+			set_entity_name(entity, new_name)
+		}
 		if ui.section(user_interface, "Transform", &memory.editor.transform_section_open) {
 			ui.inspect(user_interface, entity, Entity)
 		}

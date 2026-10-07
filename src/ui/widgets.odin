@@ -13,7 +13,6 @@ package ui
 
 import "core:fmt"
 import "core:strconv"
-import "engine:platform"
 import clay "engine:third_party/clay"
 
 // Takes the remaining space in the parent's layout direction. Put one before a panel to push
@@ -347,11 +346,12 @@ number_box :: proc(
 			editing = true
 		}
 	} else {
-		commit, cancel := edit_number_text(state)
+		place_caret_with_mouse(state, interaction, .Monospace)
+		commit, cancel := edit_text(state, numbers_only = true)
 		clicked_elsewhere := state.input.mouse[.Left].pressed && !clay.PointerOver(field_id)
 		tab := state.input.keys[.Tab].pressed || state.input.keys[.Tab].repeated
 		if commit || tab || clicked_elsewhere {
-			if parsed_value, parsed := strconv.parse_f32(string(state.edit_buffer[:state.edit_length])); parsed {
+			if parsed_value, parsed := strconv.parse_f32(edited_text(state)); parsed {
 				value^ = clamp(parsed_value, minimum, maximum)
 				changed = true
 				state.typed_value_applied = true
@@ -384,13 +384,6 @@ number_box :: proc(
 	} else if interaction.hovered || interaction.held {
 		background = state.theme.field_hover
 	}
-	displayed_text := fmt.tprintf(display_format, value^)
-	if editing {
-		// Selected text shows in brackets until typing replaces it; otherwise a caret at the end.
-		edit_text := string(state.edit_buffer[:state.edit_length])
-		displayed_text = fmt.tprintf("[%s]", edit_text) if state.edit_all_selected else fmt.tprintf("%s|", edit_text)
-	}
-
 	clay._OpenElementWithId(field_id)
 	clay.ConfigureOpenElement({
 		layout = {
@@ -409,7 +402,12 @@ number_box :: proc(
 	if marker != "" {
 		text(state, marker, .Semibold, FONT_SIZE, marker_color)
 	}
-	text(state, displayed_text, .Monospace)
+	if editing {
+		draw_edited_text(state, .Monospace)
+		state.edit_widget_drawn = true
+	} else {
+		text(state, fmt.tprintf(display_format, value^), .Monospace)
+	}
 	clay._CloseElement()
 
 	// Remember the box for Shift+Tab from the next one, and the first box for Tab from the last.
@@ -425,11 +423,87 @@ number_box :: proc(
 // Starts typing into a number box, with its current value as the text, all selected.
 @(private)
 start_editing :: proc(state: ^Ui_State, field_id: u32, value: f32) {
-	state.edit_id = field_id
-	initial_text := fmt.bprintf(state.edit_buffer[:], "%g", value)
-	state.edit_length = len(initial_text)
-	state.edit_all_selected = true
-	state.scroll_to_edit = true
+	begin_text_edit(state, field_id, fmt.tprintf("%g", value), MAX_EDIT_BYTES)
+}
+
+// What happened to a text box this frame.
+Text_Box_Result :: enum u8 {
+	Idle,      // not being typed into
+	Editing,   // being typed into
+	Applied,   // typing finished with Enter, Tab or a click elsewhere; the new text is returned
+	Cancelled, // typing finished with Escape; keep the old text
+}
+
+// A one-line text box (an object's name). It shows `current_text`; a click starts typing with
+// all of it selected, as does `start_editing` (for a shortcut such as F2). Enter, Tab or a click
+// elsewhere apply the typing, Escape cancels it. The box doesn't store anything: on .Applied,
+// `edited` is the new text (valid for this frame) and the caller keeps it however it likes.
+// At most `maximum_bytes` of UTF-8 can be typed.
+text_box :: proc(
+	state: ^Ui_State,
+	id_text: string,
+	current_text: string,
+	maximum_bytes: int = MAX_EDIT_BYTES,
+	font: Font = .Regular,
+	start_editing := false,
+) -> (edited: string, result: Text_Box_Result) {
+	box_id := clay.ID_LOCAL(id_text)
+	interaction := interact(state, box_id)
+	editing := state.edit_id == box_id.id
+
+	if !editing {
+		if interaction.clicked || start_editing {
+			begin_text_edit(state, box_id.id, current_text, maximum_bytes)
+			editing = true
+		}
+	} else {
+		place_caret_with_mouse(state, interaction, font)
+		commit, cancel := edit_text(state, numbers_only = false)
+		clicked_elsewhere := state.input.mouse[.Left].pressed && !clay.PointerOver(box_id)
+		tab := state.input.keys[.Tab].pressed || state.input.keys[.Tab].repeated
+		if commit || tab || clicked_elsewhere {
+			edited = clone_for_frame(edited_text(state))
+			result = .Applied
+			state.typed_value_applied = true
+			state.edit_id = 0
+			editing = false
+		} else if cancel {
+			result = .Cancelled
+			state.edit_id = 0
+			editing = false
+		}
+	}
+	if editing {
+		result = .Editing
+	}
+
+	background := state.theme.field
+	if editing {
+		background = state.theme.field_editing
+	} else if interaction.hovered || interaction.held {
+		background = state.theme.field_hover
+	}
+	clay._OpenElementWithId(box_id)
+	clay.ConfigureOpenElement({
+		layout = {
+			sizing         = {width = clay.SizingGrow(), height = clay.SizingFixed(points(state, ROW_HEIGHT))},
+			padding        = {left = points_u16(state, 6), right = points_u16(state, 6)},
+			childAlignment = {y = .Center},
+		},
+		backgroundColor = background,
+		cornerRadius    = clay.CornerRadiusAll(points(state, CORNER_RADIUS)),
+		border          = {color = state.theme.accent if editing else state.theme.panel_border, width = clay.BorderOutside(points_u16(state, 1))},
+		clip            = {horizontal = true},
+	})
+	if editing {
+		draw_edited_text(state, font)
+		state.edit_widget_drawn = true
+	} else {
+		// The caller's text may not outlive the frame (Clay reads it in end_frame): draw a copy.
+		text(state, clone_for_frame(current_text), font)
+	}
+	clay._CloseElement()
+	return
 }
 
 // Scrolls the panel holding a widget (by element id) just far enough to show it whole. Panels
@@ -504,36 +578,4 @@ selectable :: proc(state: ^Ui_State, label_text: string, selected: bool, index: 
 	text(state, label_text, .Regular, FONT_SIZE, state.theme.text if selected || interaction.hovered else state.theme.text_dim)
 	clay._CloseElement()
 	return interaction
-}
-
-// Applies this frame's typing to the edit buffer. Only characters that can appear in a number
-// are accepted.
-@(private)
-edit_number_text :: proc(state: ^Ui_State) -> (commit, cancel: bool) {
-	for character in platform.input_text(&state.input) {
-		is_number_character := (character >= '0' && character <= '9') || character == '.' || character == '-' || character == '+' || character == 'e' || character == 'E'
-		if !is_number_character {
-			continue
-		}
-		if state.edit_all_selected {
-			state.edit_length = 0
-			state.edit_all_selected = false
-		}
-		if state.edit_length < MAX_EDIT_BYTES {
-			state.edit_buffer[state.edit_length] = u8(character)
-			state.edit_length += 1
-		}
-	}
-	backspace := state.input.keys[.Backspace]
-	if backspace.pressed || backspace.repeated {
-		if state.edit_all_selected {
-			state.edit_length = 0
-			state.edit_all_selected = false
-		} else if state.edit_length > 0 {
-			state.edit_length -= 1
-		}
-	}
-	commit = state.input.keys[.Enter].pressed
-	cancel = state.input.keys[.Escape].pressed
-	return
 }

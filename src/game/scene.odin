@@ -186,7 +186,11 @@ entity_name :: proc(entity: ^Entity) -> string {
 	return string(entity.name_bytes[:entity.name_length])
 }
 
+// Names are any UTF-8 text up to ENTITY_NAME_BYTES (longer names are cut at a character
+// boundary). Several entities may share a name, as in Unity. The unused tail of the buffer is
+// cleared so an entity's bytes depend only on its name (undo compares entities byte for byte).
 set_entity_name :: proc(entity: ^Entity, name: string) {
+	entity.name_bytes = {}
 	entity.name_length = u8(copy(entity.name_bytes[:], truncate_utf8(name, ENTITY_NAME_BYTES)))
 }
 
