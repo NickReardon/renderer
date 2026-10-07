@@ -61,6 +61,7 @@ These eight shape the whole codebase. Together they are roughly a weekend.
 | Christian Gyrling, *Parallelizing the Naughty Dog Engine Using Fibers* (GDC 2015) — https://gdcvault.com/play/1022186/Parallelizing-the-Naughty-Dog-Engine | Job system plus a "frame-centric" design with per-frame memory. Read once the engine is single-threaded and working. | 4 |
 | Jason Gregory, *Game Engine Architecture* (book, 3rd ed.) | Broad reference for every subsystem. Its code is OOP C++, so read it for *what* systems exist, not *how* to structure them. | all |
 | Handmade Hero (Casey Muratori) — https://guide.handmadehero.org/ | A full game built from scratch on stream, with no libraries. Days ~21–25 cover hot-loading game code. Searchable episode guide. | all |
+| Fowler, Noll, Vo, *FNV hash* — http://www.isthe.com/chongo/tech/comp/fnv/ | The byte-at-a-time hash behind `core.type_layout_hash`, which the host compares to decide between hot reload and restart. | 1 |
 
 ## Immediate-mode UI
 

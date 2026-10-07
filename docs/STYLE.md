@@ -155,8 +155,9 @@ src/third_party/  vendored third-party code, unmodified (Clay)
 - **Never store procedure pointers in persistent state;** they point into the old DLL. This
   includes allocators created inside the game DLL. The host keeps old DLLs loaded so existing
   pointers stay valid, but new code shouldn't depend on that.
-- **Changing the layout of `Game_Memory` requires a full restart.** The host detects a size
-  change and restarts the game instead of reloading it.
+- **Changing the layout of `Game_Memory` requires a full restart.** The host compares a hash
+  of its layout (`core.type_layout_hash`) and restarts the game instead of reloading it when
+  the hash changes. After changing a field's meaning but not its type, press F6.
 
 ## 11. Comments
 

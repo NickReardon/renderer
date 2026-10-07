@@ -569,9 +569,11 @@ game_memory_pointer :: proc() -> rawptr {
 	return game_memory
 }
 
+// The host hot-reloads only when the new build's hash equals the running one's; otherwise
+// Game_Memory's layout changed and it restarts the game (see core/type_layout_hash.odin).
 @(export)
-game_memory_size :: proc() -> int {
-	return size_of(Game_Memory)
+game_memory_layout_hash :: proc() -> u64 {
+	return core.type_layout_hash(Game_Memory)
 }
 
 // Called on the newly loaded DLL instead of game_init: adopt the existing memory, then

@@ -5,8 +5,9 @@
 //   - the game keeps all persistent state in one block (Game_Memory) that it allocates itself;
 //   - when build/game.dll changes, the host copies it to a new name (so the build can keep
 //     overwriting game.dll), loads the copy, and hands it the existing memory;
-//   - if the size of Game_Memory changed, its layout changed, so the host restarts the game
-//     instead (F6 forces a restart too);
+//   - if Game_Memory's layout changed (the two builds' layout hashes differ, see
+//     core/type_layout_hash.odin), the old memory can't be read by the new code, so the host
+//     restarts the game instead (F6 forces a restart too);
 //   - old DLLs stay loaded until exit, so anything still pointing into their code (callbacks
 //     registered with wgpu, procedure pointers in data) stays valid.
 //
@@ -31,7 +32,7 @@ Game_API :: struct {
 	update:         proc(input: ^platform.Input, output: ^platform.Output) -> bool,
 	shutdown:       proc(),
 	memory_pointer: proc() -> rawptr,
-	memory_size:    proc() -> int,
+	memory_layout_hash: proc() -> u64,
 	hot_reloaded:   proc(memory: rawptr),
 	frame_delay_milliseconds: proc() -> f32,
 
@@ -230,9 +231,14 @@ main :: proc() {
 				continue
 			}
 			next_version += 1
-			if force_restart || new_game.memory_size() != game.memory_size() {
+			layout_changed := new_game.memory_layout_hash() != game.memory_layout_hash()
+			if force_restart || layout_changed {
 				// Game_Memory's layout changed (or F6): start the game over with fresh state.
-				fmt.println("host: restarting game")
+				if layout_changed {
+					fmt.println("host: Game_Memory's layout changed, restarting game")
+				} else {
+					fmt.println("host: restarting game")
+				}
 				game.shutdown()
 				append(&previous_games, game)
 				game = new_game
