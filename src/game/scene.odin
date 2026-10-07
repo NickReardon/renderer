@@ -263,8 +263,17 @@ name_character_allowed :: proc(character: rune) -> bool {
 	return unicode.is_letter(character) || unicode.is_digit(character) || character == ' ' || strings.contains_rune(NAME_PUNCTUATION, character)
 }
 
+// Combining marks are part of written letters: the vowel sign in Hindi "किरण" (a spacing mark),
+// or the accent in "Café" typed as "e" plus U+0301 (a nonspacing mark). Unicode's identifier
+// rules (UAX #31) allow these two kinds after the first character, and so do we; a mark at the
+// start has no letter to belong to.
+name_mark_allowed :: proc(character: rune) -> bool {
+	return unicode.is_nonspacing_mark(character) || unicode.is_spacing_mark(character)
+}
+
 // What renaming `entity` to `typed` would do. Spaces at either end are dropped. A name that's
-// empty or has a character outside name_character_allowed can't be used: `blocked`, with
+// empty or has a character outside name_character_allowed (and name_mark_allowed after the
+// first) can't be used: `blocked`, with
 // `message` saying why. A name another entity already has gets the next free " (N)", as Create
 // and Ctrl+D do: `final_name` is that name, and `message` says so (not blocking). The entity's
 // own current name is never "taken". `final_name` and `message` use the temp allocator.
@@ -273,10 +282,14 @@ check_entity_name :: proc(scene: ^Scene, entity: Entity_Handle, typed: string) -
 	if trimmed == "" {
 		return "", "A name can't be empty.", true
 	}
-	for character in trimmed {
-		if !name_character_allowed(character) {
-			return "", fmt.tprintf("Names can't contain \"%c\". Use letters, digits, spaces and _ - . ( )", character), true
+	for character, byte_index in trimmed {
+		if name_character_allowed(character) || (byte_index > 0 && name_mark_allowed(character)) {
+			continue
 		}
+		if name_mark_allowed(character) {
+			return "", "A name can't start with a combining mark.", true
+		}
+		return "", fmt.tprintf("Names can't contain \"%c\". Use letters, digits, spaces and _ - . ( )", character), true
 	}
 	final_name = truncate_utf8(trimmed, ENTITY_NAME_BYTES)
 	if entity_name_in_use(scene, final_name, entity) {

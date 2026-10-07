@@ -810,6 +810,9 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   - an empty name is refused;
   - only letters (any script, so "Café" works), digits, spaces and `_ - . ( )` are allowed, so a
     name can later be part of a file name or a reference typed by hand on any system;
+  - combining marks are allowed after the first character, as Unicode's identifier rules
+    (UAX #31) allow them: they're part of written letters, such as Hindi vowel signs or an accent
+    typed as a separate character (found in review by Codex);
   - a name another object has gets the next free " (N)", as Create and Ctrl+D already did.
 - **Unique names, unlike Unity** (Blender's way). This reverses the earlier "names may repeat"
   choice: a name will identify an object once scenes are saved and objects refer to each other.

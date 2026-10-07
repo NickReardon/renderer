@@ -127,6 +127,14 @@ test_check_entity_name :: proc(test: ^testing.T) {
 	// named in the message.
 	final_name, _, blocked = check(scene, sphere_handle, "Café_2-b.(old)")
 	testing.expect(test, final_name == "Café_2-b.(old)" && !blocked, "allowed characters pass, accents included")
+	// Combining marks after a letter are part of it (found in review of #24): a Hindi vowel sign
+	// (U+093F, a spacing mark) and a decomposed accent (U+0301, a nonspacing mark).
+	final_name, _, blocked = check(scene, sphere_handle, "किरण") // किरण
+	testing.expect(test, final_name == "किरण" && !blocked, "a Hindi name with a vowel sign passes")
+	final_name, _, blocked = check(scene, sphere_handle, "Café")
+	testing.expect(test, final_name == "Café" && !blocked, "a decomposed accent passes")
+	_, message, blocked = check(scene, sphere_handle, "́Cafe")
+	testing.expectf(test, blocked && strings.contains(message, "start"), "a name can't start with a mark (%q)", message)
 	_, message, blocked = check(scene, sphere_handle, "Ball/2")
 	testing.expectf(test, blocked && strings.contains(message, "\"/\""), "a slash is blocked and named (%q)", message)
 	_, _, blocked = check(scene, sphere_handle, "Ball\t2")
