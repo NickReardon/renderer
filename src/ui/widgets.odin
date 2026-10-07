@@ -318,6 +318,9 @@ number_box :: proc(
 	field_id := clay.ID_LOCAL(id_text)
 	interaction := interact(state, field_id)
 	editing := state.edit_id == field_id.id
+	if editing && interaction.hovered {
+		state.cursor = .Text // the I-beam while typing; otherwise the box drags, so it keeps the arrow
+	}
 	mouse_x := state.input.mouse_position.x
 
 	if !editing {
@@ -346,7 +349,7 @@ number_box :: proc(
 			editing = true
 		}
 	} else {
-		place_caret_with_mouse(state, interaction, .Monospace)
+		edit_with_mouse(state, interaction)
 		commit, cancel := edit_text(state, numbers_only = true)
 		clicked_elsewhere := state.input.mouse[.Left].pressed && !clay.PointerOver(field_id)
 		tab := state.input.keys[.Tab].pressed || state.input.keys[.Tab].repeated
@@ -356,7 +359,7 @@ number_box :: proc(
 				changed = true
 				state.typed_value_applied = true
 			}
-			state.edit_id = 0
+			finish_text_edit(state)
 			editing = false
 			if tab {
 				// Tab moves the typing to the next box, Shift+Tab to the previous one, as in Unity
@@ -373,7 +376,7 @@ number_box :: proc(
 				}
 			}
 		} else if cancel {
-			state.edit_id = 0
+			finish_text_edit(state)
 			editing = false
 		}
 	}
@@ -403,7 +406,7 @@ number_box :: proc(
 		text(state, marker, .Semibold, FONT_SIZE, marker_color)
 	}
 	if editing {
-		draw_edited_text(state, .Monospace)
+		declare_edited_text(state)
 		state.edit_widget_drawn = true
 	} else {
 		text(state, fmt.tprintf(display_format, value^), .Monospace)
@@ -423,7 +426,7 @@ number_box :: proc(
 // Starts typing into a number box, with its current value as the text, all selected.
 @(private)
 start_editing :: proc(state: ^Ui_State, field_id: u32, value: f32) {
-	begin_text_edit(state, field_id, fmt.tprintf("%g", value), MAX_EDIT_BYTES)
+	begin_text_edit(state, field_id, fmt.tprintf("%g", value), MAX_EDIT_BYTES, .Monospace)
 }
 
 // What happened to a text box this frame.
@@ -467,14 +470,17 @@ text_box :: proc(
 	interaction := interact(state, box_id)
 	editing := state.edit_id == box_id.id
 	current_check: Text_Check
+	if interaction.hovered {
+		state.cursor = .Text
+	}
 
 	if !editing {
 		if interaction.clicked || start_editing {
-			begin_text_edit(state, box_id.id, current_text, maximum_bytes)
+			begin_text_edit(state, box_id.id, current_text, maximum_bytes, font)
 			editing = true
 		}
 	} else {
-		place_caret_with_mouse(state, interaction, font)
+		edit_with_mouse(state, interaction)
 		commit, cancel := edit_text(state, numbers_only = false)
 		if check != nil {
 			current_check = check(edited_text(state), check_data)
@@ -483,7 +489,7 @@ text_box :: proc(
 		tab := state.input.keys[.Tab].pressed || state.input.keys[.Tab].repeated
 		if current_check.blocks && clicked_elsewhere {
 			result = .Cancelled // the box can't stay open while you work elsewhere: keep the old text
-			state.edit_id = 0
+			finish_text_edit(state)
 			editing = false
 		} else if current_check.blocks && (commit || tab) {
 			// Not applied: typing goes on, and the message says why.
@@ -491,11 +497,11 @@ text_box :: proc(
 			edited = clone_for_frame(edited_text(state))
 			result = .Applied
 			state.typed_value_applied = true
-			state.edit_id = 0
+			finish_text_edit(state)
 			editing = false
 		} else if cancel {
 			result = .Cancelled
-			state.edit_id = 0
+			finish_text_edit(state)
 			editing = false
 		}
 	}
@@ -526,7 +532,7 @@ text_box :: proc(
 		clip            = {horizontal = true},
 	})
 	if editing {
-		draw_edited_text(state, font)
+		declare_edited_text(state)
 		state.edit_widget_drawn = true
 	} else {
 		// The caller's text may not outlive the frame (Clay reads it in end_frame): draw a copy.

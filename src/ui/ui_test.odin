@@ -5,9 +5,11 @@
 // procedure rather than several tests that the runner would execute in parallel.
 package ui
 
+import "core:math"
 import "core:testing"
 import fontstash "vendor:fontstash"
 import "engine:platform"
+import "engine:render"
 import clay "engine:third_party/clay"
 
 Test_Model :: struct {
@@ -21,6 +23,8 @@ Test_Model :: struct {
 	name_bytes:   [TEST_NAME_BYTES]u8, // what the text box shows and edits
 	name_length:  int,
 	name_result:  Text_Box_Result,     // the text box's result in the last frame
+	long_bytes:   [64]u8,              // a second text box, for text longer than the box
+	long_length:  int,
 	start_rename: bool,                // start typing into the text box without a click
 }
 
@@ -59,9 +63,45 @@ run_frame :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model) 
 			model.name_length = copy(model.name_bytes[:], edited)
 		}
 		model.name_result = result
+		long_edited, long_result := text_box(state, "Long name", string(model.long_bytes[:model.long_length]), len(model.long_bytes))
+		if long_result == .Applied {
+			model.long_length = copy(model.long_bytes[:], long_edited)
+		}
 		model.start_rename = false
 	}
 	return finish_layout(state)
+}
+
+// The box of the text being edited: its custom element (it draws itself; see text_edit.odin).
+@(private = "file")
+find_edited_text :: proc(commands: clay.ClayArray(clay.RenderCommand)) -> (box_min, box_max: [2]f32, found: bool) {
+	commands := commands
+	for command_index in 0 ..< commands.length {
+		command := clay.RenderCommandArray_Get(&commands, command_index)
+		if command.commandType == .Custom {
+			box := command.boundingBox
+			return {box.x, box.y}, {box.x + box.width, box.y + box.height}, true
+		}
+	}
+	return
+}
+
+// The box of the first text element showing exactly `content`.
+@(private = "file")
+find_text_box :: proc(commands: clay.ClayArray(clay.RenderCommand), content: string) -> (box_min, box_max: [2]f32, found: bool) {
+	commands := commands
+	for command_index in 0 ..< commands.length {
+		command := clay.RenderCommandArray_Get(&commands, command_index)
+		if command.commandType != .Text {
+			continue
+		}
+		shown := command.renderData.text.stringContents
+		if string(shown.chars[:shown.length]) == content {
+			box := command.boundingBox
+			return {box.x, box.y}, {box.x + box.width, box.y + box.height}, true
+		}
+	}
+	return
 }
 
 // Centre of the first text element showing exactly `content`.
@@ -95,11 +135,18 @@ next_input :: proc(input: ^platform.Input) {
 	input.mouse_delta = {}
 	input.wheel = 0
 	input.text_input_length = 0
+	input.clipboard_text_length = 0
+	input.delta_seconds = 1.0 / 60
 }
 
 @(private = "file")
-press_mouse :: proc(input: ^platform.Input, position: [2]f32) {
+// A press after a pause, as a person clicks; `quick` follows the last press at once (a double- or
+// triple-click when it's in the same place).
+press_mouse :: proc(input: ^platform.Input, position: [2]f32, quick := false) {
 	next_input(input)
+	if !quick {
+		input.delta_seconds = 1
+	}
 	input.mouse_position = position
 	input.mouse[.Left] = {down = true, pressed = true}
 }
@@ -359,8 +406,8 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	expect_editing_text :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input, model: ^Test_Model, shown: string, message: string) {
 		next_input(input)
 		commands := run_frame(state, input, model)
-		_, found := find_text(commands, shown)
-		testing.expectf(test, found, "%s: expected a box showing %s", message, shown)
+		_, _, found := find_edited_text(commands)
+		testing.expectf(test, found && edited_text(state) == shown, "%s: expected a box being typed into showing %s (found %v, showing %q)", message, shown, found, edited_text(state))
 	}
 	expect_editing_text(test, state, &input, &model, "1", "Tab from Number should edit Vector X")
 	press_key(&input, .Tab)
@@ -416,7 +463,9 @@ test_widget_interaction :: proc(test: ^testing.T) {
 		next_input(input)
 		run_frame(state, input, model) // the scroll applies at the start of the frame after the move
 		commands := run_frame(state, input, model)
-		center, found := find_text(commands, shown)
+		box_min, box_max, found := find_edited_text(commands)
+		found = found && edited_text(state) == shown
+		center := (box_min + box_max) * 0.5
 		window_height := f32(input.window_size.y)
 		testing.expectf(test, found && center.y > 0 && center.y < window_height, "%s: %s should be in the window (found %v, y %.1f)", message, shown, found, center.y)
 	}
@@ -430,6 +479,7 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	free_all(context.temp_allocator)
 
 	test_text_box(test, state, &input, &model)
+	test_text_editing(test, state, &input, &model)
 
 	// --- The mouse belongs to the viewport outside the panel, and to the UI over it.
 	move_mouse(&input, {100, 400})
@@ -494,7 +544,7 @@ test_text_box :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input
 	key(state, input, model, .Delete) // XB|eta -> XB|ta
 	key(state, input, model, .Backspace) // XB|ta -> X|ta
 	testing.expect_value(test, edited_text(state), "Xta")
-	testing.expect_value(test, state.edit_caret, 1)
+	testing.expect_value(test, edit_caret(state), 1)
 	key(state, input, model, .End, shift = true)
 	start, end := selection_range(state)
 	testing.expect(test, start == 1 && end == 3, "Shift+End selects from the caret to the end")
@@ -518,7 +568,7 @@ test_text_box :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input
 	typed(state, input, model, "é") // doesn't fit, and is never cut in half
 	testing.expect_value(test, edited_text(state), "012345é")
 	key(state, input, model, .Left)
-	testing.expect_value(test, state.edit_caret, 6)
+	testing.expect_value(test, edit_caret(state), 6)
 	key(state, input, model, .Backspace)
 	key(state, input, model, .End)
 	key(state, input, model, .Backspace)
@@ -526,46 +576,26 @@ test_text_box :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input
 	key(state, input, model, .Escape)
 	free_all(context.temp_allocator)
 
-	// --- The text is drawn in pieces (before the selection, the selection, after it). They must
-	// line up the way the caret is measured, trailing spaces included.
+	// --- One measurement places everything: the boundaries are the font's own advances (trailing
+	// spaces included), and a press or a drag lands on the boundary under the pointer.
 	model.name_length = copy(model.name_bytes[:], "ab cd")
 	model.start_rename = true
 	next_input(input)
 	run_frame(state, input, model)
-	key(state, input, model, .Home)
-	key(state, input, model, .Right)
-	key(state, input, model, .Right)
-	key(state, input, model, .Right)
-	key(state, input, model, .End, shift = true) // "ab " then "cd" selected
 	next_input(input)
 	commands = run_frame(state, input, model)
-	before_box, selected_box: clay.BoundingBox
-	for command_index in 0 ..< commands.length {
-		command := clay.RenderCommandArray_Get(&commands, command_index)
-		if command.commandType != .Text {
-			continue
-		}
-		shown := command.renderData.text.stringContents
-		switch string(shown.chars[:shown.length]) {
-		case "ab ":
-			before_box = command.boundingBox
-		case "cd":
-			selected_box = command.boundingBox
-		}
-	}
-	testing.expect(test, before_box.width > 0 && selected_box.width > 0, "the text before the selection and the selection are drawn")
+	text_min, text_max, text_found := find_edited_text(commands)
+	testing.expect(test, text_found, "the edited text has its own element")
 	set_font(state, .Regular, points(state, FONT_SIZE), 0)
 	measured_width := fontstash.TextBounds(&state.font_context, "ab ")
-	testing.expectf(test, abs(before_box.width - measured_width) < 0.5, "the piece \"ab \" is as wide as the caret measures it (%v vs %v)", before_box.width, measured_width)
-	testing.expectf(test, abs(selected_box.x - (before_box.x + before_box.width)) < 1, "the selection starts where the text before it ends (%v vs %v)", selected_box.x, before_box.x + before_box.width)
-
-	// --- The mouse: a press in the text puts the caret there, a drag selects.
-	press_mouse(input, {before_box.x + 1, before_box.y + before_box.height * 0.5})
+	testing.expectf(test, abs(state.edit_caret_x[3] - measured_width) < 0.5, "the boundary after \"ab \" is where the font puts it (%v vs %v)", state.edit_caret_x[3], measured_width)
+	middle_y := (text_min.y + text_max.y) * 0.5
+	press_mouse(input, {text_min.x + state.edit_caret_x[0] + 1, middle_y})
 	run_frame(state, input, model)
-	testing.expect_value(test, state.edit_caret, 0)
+	testing.expect_value(test, edit_caret(state), 0)
 	start, end = selection_range(state)
 	testing.expect(test, start == end, "a press clears the selection")
-	move_mouse(input, {selected_box.x + 1, selected_box.y + selected_box.height * 0.5})
+	move_mouse(input, {text_min.x + state.edit_caret_x[3] + 1, middle_y})
 	run_frame(state, input, model)
 	start, end = selection_range(state)
 	testing.expect(test, start == 0 && end == 3, "dragging selects from the press to the pointer")
@@ -646,4 +676,207 @@ check_test_name :: proc(text: string, data: rawptr) -> Text_Check {
 		return {message = "Just a note."}
 	}
 	return {}
+}
+
+// Editing commands (core:text/edit), the clipboard, double- and triple-clicks, long text that
+// scrolls, the mouse cursor, and drawing.
+@(private = "file")
+test_text_editing :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input, model: ^Test_Model) {
+	key :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model, key: platform.Key, shift := false, ctrl := false) {
+		press_key(input, key)
+		if shift {
+			input.keys[.Left_Shift] = {down = true, pressed = true}
+		}
+		if ctrl {
+			input.keys[.Left_Ctrl] = {down = true, pressed = true}
+		}
+		run_frame(state, input, model)
+		input.keys[.Left_Shift] = {}
+		input.keys[.Left_Ctrl] = {}
+		input.keys[key] = {}
+	}
+	start_typing :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model, text: string) {
+		model.name_length = copy(model.name_bytes[:], text)
+		model.start_rename = true // as F2 does: typing starts with everything selected
+		next_input(input)
+		run_frame(state, input, model)
+	}
+	output_after_frame :: proc(state: ^Ui_State) -> (output: platform.Output) {
+		write_output(state, &output)
+		return
+	}
+
+	// --- Words: Ctrl+arrows jump by word, with Shift they select, Ctrl+Backspace deletes one.
+	start_typing(state, input, model, "ab cd")
+	key(state, input, model, .End)
+	key(state, input, model, .Left, ctrl = true)
+	testing.expect_value(test, edit_caret(state), 3)
+	key(state, input, model, .Left, shift = true, ctrl = true)
+	start, end := selection_range(state)
+	testing.expect(test, start == 0 && end == 3, "Ctrl+Shift+Left selects the word before")
+	key(state, input, model, .End)
+	key(state, input, model, .Backspace, ctrl = true)
+	testing.expect_value(test, edited_text(state), "ab ")
+	key(state, input, model, .Escape)
+	free_all(context.temp_allocator)
+
+	// --- Undo and redo inside the box: quick typing is one step.
+	start_typing(state, input, model, "ab")
+	key(state, input, model, .End)
+	type_text(input, "c")
+	run_frame(state, input, model)
+	type_text(input, "d")
+	run_frame(state, input, model)
+	testing.expect_value(test, edited_text(state), "abcd")
+	key(state, input, model, .Z, ctrl = true)
+	testing.expect_value(test, edited_text(state), "ab")
+	key(state, input, model, .Y, ctrl = true)
+	testing.expect_value(test, edited_text(state), "abcd")
+	// Typing right after an undo or a redo is a step of its own, however quickly it follows:
+	// Ctrl+Z then takes back just that typing (found in review of #9).
+	key(state, input, model, .Z, ctrl = true)
+	type_text(input, "e")
+	run_frame(state, input, model)
+	testing.expect_value(test, edited_text(state), "abe")
+	key(state, input, model, .Z, ctrl = true)
+	testing.expect_value(test, edited_text(state), "ab")
+	key(state, input, model, .Y, ctrl = true)
+	type_text(input, "f")
+	run_frame(state, input, model)
+	testing.expect_value(test, edited_text(state), "abef")
+	key(state, input, model, .Z, ctrl = true)
+	testing.expect_value(test, edited_text(state), "abe")
+	key(state, input, model, .Escape)
+	free_all(context.temp_allocator)
+
+	// --- Copy and cut ask the host to set the clipboard; paste takes one line of the host's.
+	start_typing(state, input, model, "ab cd")
+	key(state, input, model, .End)
+	key(state, input, model, .Left, shift = true, ctrl = true) // "cd"
+	key(state, input, model, .C, ctrl = true)
+	output := output_after_frame(state)
+	testing.expect(test, output.set_clipboard && string(output.clipboard_text[:output.clipboard_text_length]) == "cd", "Ctrl+C copies the selection")
+	testing.expect_value(test, edited_text(state), "ab cd")
+	key(state, input, model, .X, ctrl = true)
+	output = output_after_frame(state)
+	testing.expect(test, output.set_clipboard && edited_text(state) == "ab ", "Ctrl+X copies and removes the selection")
+	next_input(input)
+	run_frame(state, input, model)
+	output = output_after_frame(state)
+	testing.expect(test, !output.set_clipboard, "the clipboard request lasts one frame")
+	press_key(input, .V)
+	input.keys[.Left_Ctrl] = {down = true, pressed = true}
+	input.clipboard_text_length = copy(input.clipboard_text[:], "xy\nsecond line")
+	run_frame(state, input, model)
+	input.keys[.Left_Ctrl] = {}
+	testing.expect_value(test, edited_text(state), "ab xy")
+	key(state, input, model, .Escape)
+	free_all(context.temp_allocator)
+
+	// --- Double-click selects a word and dragging extends by words; triple-click selects all.
+	start_typing(state, input, model, "ab cd ef")
+	next_input(input)
+	commands := run_frame(state, input, model)
+	text_min, text_max, _ := find_edited_text(commands)
+	middle_y := (text_min.y + text_max.y) * 0.5
+	// The middle of the character at `offset`, on screen.
+	character_middle :: proc(state: ^Ui_State, text_min_x: f32, offset: int, y: f32) -> [2]f32 {
+		return {text_min_x - state.edit_scroll_x + (state.edit_caret_x[offset] + state.edit_caret_x[offset + 1]) * 0.5, y}
+	}
+	press_mouse(input, character_middle(state, text_min.x, 4, middle_y)) // in "cd"
+	run_frame(state, input, model)
+	release_mouse(input)
+	run_frame(state, input, model)
+	press_mouse(input, character_middle(state, text_min.x, 4, middle_y), quick = true)
+	run_frame(state, input, model)
+	start, end = selection_range(state)
+	testing.expect(test, start == 3 && end == 5, "a double-click selects the word")
+	move_mouse(input, character_middle(state, text_min.x, 7, middle_y)) // into "ef"
+	run_frame(state, input, model)
+	start, end = selection_range(state)
+	testing.expect(test, start == 3 && end == 8, "dragging after a double-click extends by whole words")
+	release_mouse(input)
+	run_frame(state, input, model)
+	for click in 0 ..< 3 {
+		press_mouse(input, character_middle(state, text_min.x, 1, middle_y), quick = click > 0)
+		run_frame(state, input, model)
+		release_mouse(input)
+		run_frame(state, input, model)
+	}
+	testing.expect(test, all_text_selected(state), "a triple-click selects everything")
+	key(state, input, model, .Escape)
+	free_all(context.temp_allocator)
+
+	// --- Text longer than its box scrolls sideways to keep the caret in view.
+	LONG_TEXT :: "The quick brown fox jumps over the lazy dog, again and again"
+	model.long_length = copy(model.long_bytes[:], LONG_TEXT)
+	next_input(input)
+	commands = run_frame(state, input, model)
+	long_min, long_max, long_found := find_text_box(commands, LONG_TEXT)
+	testing.expect(test, long_found, "the long text box shows its text")
+	long_middle := [2]f32{long_min.x + 10, (long_min.y + long_max.y) * 0.5}
+	move_mouse(input, long_middle)
+	run_frame(state, input, model)
+	testing.expect_value(test, output_after_frame(state).cursor, platform.Cursor.Text)
+	press_mouse(input, long_middle)
+	run_frame(state, input, model)
+	release_mouse(input)
+	run_frame(state, input, model) // typing starts with everything selected, the caret at the end
+	next_input(input)
+	commands = run_frame(state, input, model)
+	text_min, text_max, _ = find_edited_text(commands)
+	visible_width := text_max.x - text_min.x
+	caret_on_screen := state.edit_caret_x[len(LONG_TEXT)] - state.edit_scroll_x
+	testing.expectf(test, state.edit_scroll_x > 0 && caret_on_screen >= 0 && caret_on_screen <= visible_width, "the end of the text scrolls into view (scroll %v, caret at %v of %v)", state.edit_scroll_x, caret_on_screen, visible_width)
+	key(state, input, model, .Home)
+	testing.expect_value(test, state.edit_scroll_x, f32(0))
+	key(state, input, model, .Escape)
+	move_mouse(input, {600, 400})
+	run_frame(state, input, model)
+	testing.expect_value(test, output_after_frame(state).cursor, platform.Cursor.Default)
+	free_all(context.temp_allocator)
+
+	// --- Drawing: the selection, the glyphs and the caret all sit on the measured positions, and
+	// the caret blinks. (The renderer's 2D overlay only collects quads on the CPU.)
+	start_typing(state, input, model, "ab cd")
+	key(state, input, model, .End)
+	key(state, input, model, .Left, shift = true, ctrl = true) // "cd" selected, the caret at 3
+	next_input(input)
+	commands = run_frame(state, input, model)
+	text_min, text_max, _ = find_edited_text(commands)
+	renderer := new(render.Renderer)
+	defer free(renderer)
+	renderer.surface_size = input.window_size
+	render.begin_frame(renderer, input.window_size)
+	state.edit_blink_seconds = 0
+	draw_edited_text(state, renderer, text_min, text_max, {0, 0}, {1200, 800})
+	origin_x := math.round(text_min.x - state.edit_scroll_x)
+	shapes, glyphs: [dynamic]render.Overlay_Quad
+	defer delete(shapes)
+	defer delete(glyphs)
+	for quad in renderer.overlay_quads[:renderer.overlay_quad_count] {
+		append(&glyphs if quad.mode == .Glyph else &shapes, quad)
+	}
+	testing.expect_value(test, len(shapes), 2) // the selection, then the caret
+	if len(shapes) == 2 {
+		selection, caret := shapes[0], shapes[1]
+		testing.expect(test, abs(selection.rect_min.x - (origin_x + state.edit_caret_x[3])) < 0.01 && abs(selection.rect_max.x - (origin_x + state.edit_caret_x[5])) < 0.01, "the highlight spans the selected characters' boundaries")
+		testing.expect(test, abs(caret.rect_min.x - math.round(origin_x + state.edit_caret_x[3])) < 0.01, "the caret is drawn at its boundary")
+	}
+	if len(glyphs) >= 4 {
+		letter_c := glyphs[3]
+		testing.expectf(test, letter_c.rect_min.x >= origin_x + state.edit_caret_x[3] - 1 && letter_c.rect_max.x <= origin_x + state.edit_caret_x[4] + 1, "the glyph c sits between its boundaries (%v..%v vs %v..%v)", letter_c.rect_min.x, letter_c.rect_max.x, origin_x + state.edit_caret_x[3], origin_x + state.edit_caret_x[4])
+	}
+	render.begin_frame(renderer, input.window_size)
+	state.edit_blink_seconds = CARET_BLINK_SECONDS + 0.01 // the off half of the blink
+	draw_edited_text(state, renderer, text_min, text_max, {0, 0}, {1200, 800})
+	shape_count := 0
+	for quad in renderer.overlay_quads[:renderer.overlay_quad_count] {
+		if quad.mode != .Glyph {
+			shape_count += 1
+		}
+	}
+	testing.expect_value(test, shape_count, 1) // only the selection
+	key(state, input, model, .Escape)
+	free_all(context.temp_allocator)
 }

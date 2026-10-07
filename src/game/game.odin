@@ -200,7 +200,7 @@ default_viewport_camera :: proc() -> Viewport_Camera {
 
 // Runs one frame. Returns false when the game wants to quit.
 @(export)
-game_update :: proc(input: ^platform.Input) -> bool {
+game_update :: proc(input: ^platform.Input, output: ^platform.Output) -> bool {
 	if input.quit {
 		return false
 	}
@@ -208,6 +208,11 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	user_interface := &game_memory.user_interface
 
 	render.begin_frame(renderer, input.window_size)
+	// --rename-type: once the rename's text box has the keyboard, type into it as if from the keyboard.
+	if editor := &game_memory.editor; editor.developer_type_length > 0 && ui.wants_keyboard(user_interface) {
+		input.text_input_length = copy(input.text_input[:], editor.developer_type_bytes[:editor.developer_type_length])
+		editor.developer_type_length = 0
+	}
 	ui.begin_frame(user_interface, input)
 	draw_editor_ui(game_memory, input)
 	// A typed Inspector value is a finished edit, even when it was applied by pressing the mouse
@@ -272,6 +277,7 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	render.debug_line(renderer, {0, 0, 0}, {0, 2, 0}, {0.3, 0.85, 0.3, 1})
 
 	ui.end_frame(user_interface, renderer)
+	ui.write_output(user_interface, output) // the mouse cursor and clipboard requests, for the host
 
 	// The 3D view fills the space the UI layout left for it. Picking uses this rectangle next
 	// frame, matching what was on screen when the user clicked.
@@ -357,6 +363,7 @@ effective_target_frame_rate :: proc(settings: Render_Settings, input: ^platform.
 //   --msaa=off           no multisample anti-aliasing
 //   --pick-center-of=Sphere  click the named object's centre once the view is laid out
 //   --grid-width=3       grid line width in pixels
+//   --rename-type=TEXT   like --rename, then type TEXT into the box (checks the caret and scrolling)
 apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 	for argument in arguments {
 		if strings.has_prefix(argument, "--render-scale=") {
@@ -379,6 +386,10 @@ apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 			editor.developer_pick_name_length = copy(editor.developer_pick_name_bytes[:], argument[len("--pick-center-of="):])
 		} else if argument == "--rename" {
 			game_memory.editor.developer_rename = true
+		} else if strings.has_prefix(argument, "--rename-type=") {
+			editor := &game_memory.editor
+			editor.developer_rename = true
+			editor.developer_type_length = copy(editor.developer_type_bytes[:], argument[len("--rename-type="):])
 		} else if strings.has_prefix(argument, "--grid-width=") {
 			if width, parsed := strconv.parse_f32(argument[len("--grid-width="):]); parsed {
 				game_memory.grid_style.line_width_pixels = clamp(width, 0.25, 6)

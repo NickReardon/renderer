@@ -129,6 +129,7 @@ Read these alongside the articles to see the ideas at full scale.
 | RAD Debugger (Epic Games, C) — https://github.com/EpicGamesExt/raddebugger | Ryan Fleury's codebase: arenas everywhere, IMGUI, a large application with no OOP. |
 | sokol (Andre Weissflog, C) — https://github.com/floooh/sokol | Handle-based resource pools in `sokol_gfx.h`. |
 | Dear ImGui (C++) — https://github.com/ocornut/imgui | The most widely used IMGUI. |
+| Odin `core:text/edit` (in your install) and rxi, "Textbox behaviour" — https://rxi.github.io/textbox_behaviour.html, "A simple undo system" — https://rxi.github.io/a_simple_undo_system.html | The text editing commands and undo grouping our text boxes use. |
 | Blender mesh code (`source/blender/blenkernel`, `BKE_mesh*`) | The SoA mesh after the refactor above. |
 | Your friend's Modeler3D (C++) — https://github.com/EmilianoManaloIV/3D-Modeling-Engine-Clause-Project- | Feature reference and test cases (exact volumes, closed-mesh checks) for porting modeling operations. |
 | Odin examples — https://github.com/odin-lang/examples | Small working programs for SDL3, wgpu, Vulkan, Metal, D3D. |

@@ -54,6 +54,8 @@ Editor_State :: struct {
 	developer_pick_name_bytes:  [ENTITY_NAME_BYTES]u8,
 	developer_pick_name_length: int,
 	developer_rename:           bool, // --rename: press F2 once the pick is done
+	developer_type_bytes:       [ENTITY_NAME_BYTES]u8, // --rename-type=TEXT: typed once the rename starts
+	developer_type_length:      int,
 }
 
 // Viewport mouse and keyboard handling. Runs after the UI has claimed what it wants.

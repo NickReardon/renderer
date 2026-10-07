@@ -643,14 +643,15 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   it too. The alternative, an editing state per box, would need the caller to keep it between
   frames, which an immediate-mode widget is meant to avoid. Number boxes moved onto it and got a
   real caret and selection; the old `[selected]` and `text|` displays are gone.
-- **Caret and selection are two byte offsets,** `edit_caret` and `edit_anchor` (the selection
+- **Caret and selection are two byte offsets** (now core:text/edit's `selection`; see "Text
+  editing" below), `edit_caret` and `edit_anchor` (the selection
   is the range between them; Shift moves only the caret). Offsets always sit on UTF-8
   character boundaries, which can be recognized without decoding: continuation bytes look like
   `10xxxxxx`.
 - **The text box doesn't store its text.** It shows the string it's given and returns a
   `Text_Box_Result` and, on `.Applied`, the new text. The caller keeps names in whatever form
   it likes (a fixed buffer in `Entity`); the UI never holds a pointer into game data.
-- **Drawing the caret with Clay:** the edited text is drawn as up to three text elements (before
+- **Drawing the caret with Clay** (replaced; see "Text editing" below): the edited text is drawn as up to three text elements (before
   the selection, the selection on a highlight, after it) plus a 1-point-wide caret element, side
   by side with no gap. A click finds the caret position by measuring each prefix with fontstash
   and taking the nearest boundary. A test checks that Clay's layout and that measurement agree,
@@ -658,9 +659,9 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
 - **A box that stops being drawn while typed into gives up the keyboard.** Otherwise a box
   whose panel closed, or whose object went away, would keep `edit_id` and block every shortcut.
   Boxes report being drawn (`edit_widget_drawn`); `finish_layout` drops an edit nobody drew.
-- **Not yet:** clipboard (Ctrl+C / X / V need the host to pass clipboard text both ways), word
-  jumps with Ctrl+arrows, double-click to select a word, keeping the caret visible in text
-  longer than its box, and Tab from the name box to the number boxes.
+- **Not yet:** clipboard, word jumps, double-click to select a word and keeping the caret
+  visible in long text (all done later, see "Text editing"), and Tab from the name box to the
+  number boxes.
 
 ## Orthographic view and the view gizmo
 
@@ -747,6 +748,59 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   family of lines fades out as its cells shrink from 12 to 4 pixels apart, as Blender's grid
   levels do. Widths under a pixel draw a fainter 1-pixel line (same average brightness, no
   shimmer). The width is in window pixels; the renderer scales it by the render scale.
+
+## Text editing: core:text/edit, drawn from one measurement
+
+- **What was wrong with the first text box.** It laid the edited text out as separate Clay text
+  elements (before the selection, the selection, after it) with the caret as a 1-point element
+  between them. Each piece was placed and snapped to whole pixels on its own, so letters shifted
+  by a pixel when the selection or caret moved, kerning across a boundary was lost, and the
+  caret took up a pixel of room in the text. Clicks measured prefixes differently from how the
+  text was drawn, so the caret could land a character off. It also didn't blink, and long text
+  didn't scroll.
+- **Not a reason to switch to Dear ImGui.** Its text input (stb_textedit plus years of polish)
+  would have given us all of this, but adopting it means replacing the Clay UI or running two UI
+  systems with two themes. Nothing about immediate mode stops a good text box; the widget was
+  built the wrong way. What ImGui does, and we now do: the box is one rectangle, and inside it
+  the widget positions every character once per frame, from one list. The text, the selection,
+  the caret, clicks and scrolling all read that list.
+- **Drawing:** Clay lays out an empty "custom" element where the text goes; end_frame gets a
+  custom render command for it in the right draw order and clip region, and `draw_edited_text`
+  draws the selection highlight, the glyphs and the caret into it with the overlay API. The
+  positions (`edit_caret_x`) come from fontstash's own text iterator, the same calls that place
+  the glyphs, with one whole-pixel origin for the whole string. Text wider than its box scrolls
+  sideways just enough to keep the caret in view.
+- **Editing: Odin's `core:text/edit`** (in the standard library, after rxi's "Textbox
+  behaviour" and "A simple undo system"). It does the selection, word movement, word deletion
+  and an undo history that groups typing less than 0.3 s apart. We map our keys to its commands.
+  Copy, cut and paste we do ourselves, through the host, instead of its clipboard callbacks.
+  The text lives in a fixed buffer behind a `strings.Builder` with the nil allocator, so the
+  box's byte limit is the builder's capacity, and core:text/edit never cuts a character in half
+  when it's full. Rejected: extending our own editing code (~150 more lines to keep correct).
+- **Hot reload and core:text/edit.** Its `State` and the builder contain allocators, which are
+  procedure pointers, and they live in `Game_Memory`. So `refresh_edit_pointers` sets them again
+  at the start of every use; nothing from a previous frame (possibly a previous DLL) is trusted.
+  Undo history is allocated with the context's allocator, which is the host's and doesn't unload.
+  Clipboard callbacks would be procedure pointers kept in state, so they aren't used.
+- **Clipboard and cursor go through the host,** the only package that may call SDL.
+  `platform.Input` gains the clipboard's text, read only on frames where Ctrl+V is pressed
+  (asking the OS can be slow). A new `platform.Output`, filled by the game each frame
+  (`ui.write_output`), asks the host to set the clipboard and the mouse cursor (an I-beam over
+  text boxes, and over number boxes while typing; otherwise number boxes drag, so they keep the
+  arrow). `game_update` now takes the output too.
+- **Mouse:** double-click selects a word and dragging then extends by words; triple-click selects
+  all. The UI counts quick presses in the same place (0.4 s, 4 points) in begin_frame.
+- **The caret blinks** (0.53 s on, 0.53 s off, Windows' default) and shows at once after any
+  change.
+- **Tests** cover the commands, the clipboard both ways, double- and triple-clicks, scrolling,
+  the cursor, and drawing: the renderer's overlay API only collects quads on the CPU, so a test
+  draws the edited text and checks the selection, glyph and caret quads land on the measured
+  positions. Breaking the caret drawing or word movement makes them fail.
+- **Fixed on the way:** starting to type in a box less than 0.3 s after an edit in another box
+  merged the first change into no undo step (core:text/edit's timer carried over).
+- **Fixed in review (Codex):** the same timer wasn't restarted by undo and redo either, so typing
+  within 0.3 s of the last edit after a Ctrl+Z joined the undone edit, and the next Ctrl+Z
+  couldn't take it back. Undo and redo now clear the timer; a test types right after each.
 
 ## Name validation
 

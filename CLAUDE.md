@@ -25,6 +25,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --target-fps=120        dynamic resolution's target (default: display refresh rate)
   --pick-center-of=Sphere click the named object's centre (tests picking end to end)
   --rename                after the pick, press F2 (the Hierarchy row becomes a text box)
+  --rename-type=TEXT      like --rename, then type TEXT into the box
   --mirror=Cube           scale X = -1 on the named object (mirrored-transform check)
   --flatten=Sphere        scale Y = 0 on the named object (zero-scale check)
   --tool=rotate           start with a tool (hand, move, rotate, scale); --local for Local axes
@@ -80,7 +81,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
 ## Package layout
 
 ```
-src/platform/  plain shared types (Input, Native_Window); no procedures, importable by all
+src/platform/  plain shared types (Input, Output, Native_Window); no procedures, importable by all
 src/host/      executable: SDL3 window, input, main loop, hot reload; only package using SDL
 src/game/      editor + game, hot-reloaded DLL; all persistent state in Game_Memory
                game.odin (frame, settings, panels), scene.odin (entities, mesh assets),
@@ -139,13 +140,14 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
 - **Never commit to `main` directly.** `main` always builds and passes `build.bat test`.
 - **One branch per milestone or fix,** created from an up-to-date `main`:
   `feature/<name>` (e.g. `feature/undo`), `fix/<name>`, `docs/<name>`, `chore/<name>`.
-- **Commit on the branch as you go,** push it, and open a pull request with `gh pr create`. The
-  description says what changed and why, how it was verified (build, tests, captures), and
-  what's not done. End it with the Claude Code attribution line.
+- **For implementation and other code work,** commit on the task branch as you go, push it, and
+  open a pull request with `gh pr create`. The description says what changed and why, how it was
+  verified (build, tests, captures), and what's not done. End it with the Claude Code attribution
+  line. Proposals are written in the issue, and docs-first PRs are made on GitHub (see below).
 - **Merge only after the build and all tests pass and the owner approves.** The repository
   allows **squash merges only** (`gh pr merge --squash`): each pull request becomes one commit on
-  `main`, and GitHub deletes the branch. Afterwards: `git switch main`, `git pull`, and delete the
-  local branch.
+  `main`, and GitHub deletes the branch. Afterwards, remove the task worktree, delete its local
+  branch after confirming the squash merge, and pull GitHub `main` into the main checkout.
 - **Never force-push `main` or rewrite pushed history.**
 - **Commits use the GitHub no-reply address** (`32754140+NickReardon@users.noreply.github.com`,
   set in this repository's git config) because the owner's account blocks pushes that expose
@@ -161,15 +163,44 @@ issue is where work is claimed and handed over:
 
 - **Before starting,** read the issue and its comments (`gh issue view <n> --comments`), and
   check it isn't labeled `in-progress` (someone else has it).
-- **Claim it:** add the `in-progress` label and comment the branch name
-  (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`).
-- **Name the branch with the issue number:** `feature/<n>-<name>`, `fix/<n>-<name>`.
-- **Write `Fixes #<n>` in the pull request,** so merging it closes the issue.
+- **Design in the issue, approved before any work.** For work with design choices (features,
+  architecture), draft a high-level proposal in the issue: what we intend to build and why, the
+  main choice, and the options considered. Discuss it in the comments, and update the issue's
+  description as it settles. The owner approves it with a label that also picks the route:
+  - **`approved: implement`** (the usual case): build it, and put the docs in the same PR as
+    the code. They're written from what was actually built, so they start out true;
+  - **`approved: docs-first`** (large or cross-cutting designs): first a docs PR, then the
+    implementation. Use GitHub's web editor or API to create a `docs/<n>-<name>` branch and the
+    PR (not a local docs worktree, local file writes, or a push). Add a section to
+    `docs/DESIGN.md` (until #26 splits it) with **Status: Proposed** and a link to the issue.
+    Wait for the owner to approve and merge it; the implementation PR then fills in the detail
+    and sets the status to **Accepted**.
+
+  Without an `approved:` label, nobody starts the work. Plain bug fixes and trivial changes
+  skip the proposal. A design a later one replaces is marked **Superseded by …** (a link).
+- **Claim it:** add the `in-progress` label and comment that work has started
+  (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`). Add the
+  branch name to the issue when the branch is created.
+- **Name the branch with the issue number:** `feature/<n>-<name>` or `fix/<n>-<name>` (and
+  `docs/<n>-<name>` for a docs-first PR).
+- **Write `Fixes #<n>` in the implementation pull request,** so merging it closes the issue (a
+  docs-first PR says `Part of #<n>`).
 - **Stopping partway:** comment where things stand (what's done, what's failing, what's next)
   and remove the `in-progress` label, so the next agent can pick it up.
 - **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
-  GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears.
-- On one machine, give each agent its own git worktree, so they don't share a working directory.
+  GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears. Workflow
+  labels: `approved: implement`, `approved: docs-first` (set only by the owner) and `in-progress`.
+- **The main checkout (`D:\Renderer`) stays on `main`.** Pull GitHub `main` into it before
+  creating a code worktree: `git -C D:/Renderer pull --ff-only origin main` (forward slashes:
+  in the Bash tool a backslash is an escape, so `D:\Renderer` becomes `D:Renderer`). Create each
+  implementation or other code task in its own worktree under `.claude/worktrees/`, branching
+  from that updated local `main` (`git -C D:/Renderer worktree add
+  .claude/worktrees/<task-name> -b <branch> main`). Never switch branches in the main checkout.
+  Before opening or updating a task PR, pull GitHub `main` into the main checkout again, merge
+  that `main` into the task branch in its worktree, resolve conflicts, and rerun affected checks.
+  Merge rather than rebase an already pushed task branch, so its history is not rewritten.
+  Remove the task worktree after its PR is merged (`git worktree remove`). Docs-first PRs are
+  made on GitHub directly, as described above.
 
 ## How to work
 
@@ -179,8 +210,9 @@ issue is where work is claimed and handed over:
   "closed mesh stays closed").
 - **Ask before adding any dependency,** including another `vendor:` package.
 - **End each change with a short explanation** of why it is built the way it is, aimed at someone
-  learning these techniques. Record real design decisions (choices between alternatives) in
-  `docs/DESIGN.md`.
+  learning these techniques. Design decisions (choices between alternatives) are written up in
+  `docs/DESIGN.md` before the work, in a docs PR (see "Docs first" above), and corrected in
+  the implementation PR.
 - **Keep changes to one milestone at a time;** don't build ahead of what was asked.
 - **Ideas outside the current branch's scope become GitHub issues,** not part of the branch:
   recommend them, file an issue (what, why, roughly how, an `area:` label), and keep the branch
