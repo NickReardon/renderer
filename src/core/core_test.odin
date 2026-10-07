@@ -280,3 +280,21 @@ test_perspective_reverse_z :: proc(test: ^testing.T) {
 	testing.expect(test, depth_at(projection, -1000) < 0.001, "far points must approach depth 0")
 	testing.expect(test, depth_at(projection, -1) > depth_at(projection, -2), "depth must shrink with distance")
 }
+
+@(test)
+test_orthographic_reverse_z :: proc(test: ^testing.T) {
+	// Near is behind the eye (negative), as the editor's orthographic view uses it.
+	near, far: f32 = -100, 100
+	projection := orthographic_reverse_z(2, 1.5, near, far)
+
+	clip_at :: proc(projection: matrix[4, 4]f32, view_point: [3]f32) -> [4]f32 {
+		return projection * [4]f32{view_point.x, view_point.y, view_point.z, 1}
+	}
+	testing.expect(test, abs(clip_at(projection, {0, 0, -near}).z - 1) < EPSILON, "near plane must map to depth 1")
+	testing.expect(test, abs(clip_at(projection, {0, 0, -far}).z) < EPSILON, "far plane must map to depth 0")
+	testing.expect(test, clip_at(projection, {0, 0, -1}).z > clip_at(projection, {0, 0, -2}).z, "depth must shrink with distance")
+	// No perspective divide: w stays 1, and size doesn't change with distance.
+	corner := clip_at(projection, {3, 2, -50}) // half width = 2 * 1.5
+	testing.expect(test, corner.w == 1, "w must be 1")
+	testing.expect(test, abs(corner.x - 1) < EPSILON && abs(corner.y - 1) < EPSILON, "the half-size maps to the viewport edge at any depth")
+}

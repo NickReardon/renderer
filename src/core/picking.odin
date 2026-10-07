@@ -29,6 +29,18 @@ ray_from_viewport :: proc(eye, target, up: [3]f32, vertical_fov, aspect_ratio: f
 	return {origin = eye, direction = linalg.normalize(direction)}
 }
 
+// The same for an orthographic camera: every ray points straight ahead, and the point of the
+// viewport moves the ray's start across the view instead of turning it. `half_height` is the
+// world size of half the view's height.
+ray_from_viewport_orthographic :: proc(eye, target, up: [3]f32, half_height, aspect_ratio: f32, normalized_position: [2]f32) -> Ray {
+	forward := linalg.normalize(target - eye)
+	right := linalg.normalize(linalg.cross(forward, up))
+	camera_up := linalg.cross(right, forward)
+	half_width := half_height * aspect_ratio
+	origin := eye + right * (normalized_position.x * half_width) + camera_up * (normalized_position.y * half_height)
+	return {origin = origin, direction = forward}
+}
+
 // Converts a pixel inside a viewport rectangle (origin top-left, y down) to the -1..1 range
 // used by ray_from_viewport (y up).
 viewport_normalized_position :: proc(pixel, viewport_min, viewport_max: [2]f32) -> [2]f32 {

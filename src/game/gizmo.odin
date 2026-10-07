@@ -145,10 +145,7 @@ toggle_handle_position :: proc(gizmo: ^Gizmo_State) {
 // The camera matrices the renderer uses for the 3D view, from the last frame's viewport.
 viewport_view_projection :: proc(memory: ^Game_Memory) -> matrix[4, 4]f32 {
 	viewport_size := memory.viewport_max - memory.viewport_min
-	eye := viewport_camera_eye(memory.camera)
-	view := core.look_at(eye, memory.camera.pivot, core.WORLD_UP)
-	projection := core.perspective_reverse_z(memory.camera.vertical_fov, viewport_size.x / max(viewport_size.y, 1), 0.05)
-	return projection * view
+	return viewport_camera_projection(memory.camera, viewport_size.x / max(viewport_size.y, 1)) * viewport_camera_view(memory.camera)
 }
 
 // World point to window pixel. `visible` is false for points behind the camera.
@@ -211,13 +208,9 @@ compute_gizmo_frame :: proc(memory: ^Game_Memory) -> (frame: Gizmo_Frame) {
 	frame.origin_pixel = origin_pixel
 
 	// World size of one pixel at the gizmo's depth, to keep the gizmo a constant size on screen.
-	eye := viewport_camera_eye(memory.camera)
-	forward := linalg.normalize(memory.camera.pivot - eye)
-	depth := linalg.dot(frame.origin - eye, forward)
-	viewport_height := max(frame.viewport_max.y - frame.viewport_min.y, 1)
-	world_per_pixel := 2 * depth * math.tan(memory.camera.vertical_fov * 0.5) / viewport_height
+	world_per_pixel := viewport_camera_world_per_pixel(memory.camera, frame.origin, frame.viewport_max.y - frame.viewport_min.y)
 	frame.world_length = GIZMO_SIZE_POINTS * frame.points_to_pixels * world_per_pixel
-	frame.toward_viewer = linalg.normalize(eye - frame.origin)
+	frame.toward_viewer = viewport_camera_toward_viewer(memory.camera, frame.origin)
 	frame.visible = true
 	return
 }

@@ -124,6 +124,18 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 			game_memory.gizmo.local_orientation = true
 		case "--center":
 			game_memory.gizmo.handle_position = .Center
+		case "--ortho":
+			game_memory.camera.orthographic = true
+		case "--view=right", "--view=left", "--view=top", "--view=bottom", "--view=front", "--view=back":
+			view_names := VIEW_GIZMO_AXIS_VIEW_NAMES
+			directions := VIEW_GIZMO_DIRECTIONS
+			for name, axis_index in view_names {
+				if strings.equal_fold(argument[len("--view="):], name) {
+					snap_viewport_camera(&game_memory.camera, directions[axis_index])
+				}
+			}
+		case "--view=corner":
+			snap_viewport_camera(&game_memory.camera, {1, 1, 1})
 		}
 	}
 	return true
@@ -234,6 +246,7 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	}
 	draw_selection_outlines(game_memory, renderer)
 	draw_gizmo(game_memory, renderer) // before ui.end_frame, so panels draw over it
+	draw_view_gizmo(game_memory, renderer)
 
 	// The grid shows the X (red) and Z (blue) axes; add the vertical Y axis in green.
 	render.debug_line(renderer, {0, 0, 0}, {0, 2, 0}, {0.3, 0.85, 0.3, 1})
@@ -249,11 +262,10 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	game_memory.viewport_min, game_memory.viewport_max = viewport_min, viewport_max
 	viewport_size := viewport_max - viewport_min
 	aspect_ratio := viewport_size.x / max(viewport_size.y, 1)
-	eye := viewport_camera_eye(game_memory.camera)
 	camera := render.Camera{
-		view         = core.look_at(eye, game_memory.camera.pivot, core.WORLD_UP),
-		projection   = core.perspective_reverse_z(game_memory.camera.vertical_fov, max(aspect_ratio, 0.01), 0.05),
-		position     = eye,
+		view         = viewport_camera_view(game_memory.camera),
+		projection   = viewport_camera_projection(game_memory.camera, aspect_ratio),
+		position     = viewport_camera_eye(game_memory.camera),
 		viewport_min = viewport_min,
 		viewport_max = viewport_max,
 	}
@@ -396,6 +408,7 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 
 		if ui.section(user_interface, "View", &memory.view_section_open) {
 			ui.checkbox(user_interface, "Show grid", &memory.show_grid)
+			ui.checkbox(user_interface, "Orthographic", &memory.camera.orthographic)
 			field_of_view_degrees := math.to_degrees(memory.camera.vertical_fov)
 			if ui.number_field(user_interface, "Field of view", &field_of_view_degrees, 0.2, 10, 120, "%.1f°") {
 				memory.camera.vertical_fov = math.to_radians(field_of_view_degrees)
@@ -408,7 +421,7 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 				memory.camera.yaw = math.to_radians(yaw_degrees)
 			}
 			pitch_degrees := math.to_degrees(memory.camera.pitch)
-			if ui.number_field(user_interface, "Pitch", &pitch_degrees, 0.5, -89, 89, "%.1f°") {
+			if ui.number_field(user_interface, "Pitch", &pitch_degrees, 0.5, -90, 90, "%.1f°") {
 				memory.camera.pitch = math.to_radians(pitch_degrees)
 			}
 			ui.number_field(user_interface, "Distance", &memory.camera.distance, 0.05, 0.1, 1000, "%.2f")

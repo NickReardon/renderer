@@ -622,3 +622,38 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   enough to show it. Reading last frame's layout costs one frame of delay; finding the box's
   position mid-layout isn't possible, because Clay only positions elements in `EndLayout`.
 - Only number boxes take part; checkboxes and buttons have no keyboard focus yet.
+
+## Orthographic view and the view gizmo
+
+- **Unity's scene gizmo, as knobs rather than Autodesk's ViewCube.** A ViewCube's faces,
+  edges and corners never overlap each other, but it needs the cube's faces drawn and
+  hit-tested as 3D polygons. Knobs are circles at projected unit directions: six axes (X Y Z
+  filled and lettered, the negatives hollow) and eight cube corners. They're drawn far to near
+  and hit-tested near to far, so a knob behind another is reached by turning the view a
+  little, as in Unity and Blender. The centre square (projection) is drawn over all knobs:
+  in an axis or corner view the knob facing you sits exactly on it, and it must stay
+  clickable. Corner views in orthographic mode are true isometric (pitch atan(1/√2)).
+- **Snapping keeps the pivot and distance,** so what you were looking at stays centred. Top
+  and Bottom use yaw 0: in Top, +X is right and the scene's back (-Z) is up, as in Unity.
+  Snaps are instant; Unity animates them (a later polish).
+- **The camera basis comes from yaw and pitch, not `look_at(…, WORLD_UP)`.** Crossing the
+  view direction with world up is zero when looking straight down, so the old camera clamped
+  pitch to 89.4° and a "top" view was slightly tilted, which shows in orthographic as thin
+  slivers of every side face. `right = (cos yaw, 0, -sin yaw)` is defined at the poles, so
+  pitch now reaches ±90°. The view matrix, projection, picking ray, pixel size and the
+  direction toward the viewer all come from `camera.odin` now; they were rebuilt in four
+  places before, and adding a projection mode to four copies invites a mismatch.
+- **Orthographic size is tied to `distance`:** half height = distance · tan(fov / 2), the
+  perspective view's height at the pivot. Switching modes keeps the pivot's surroundings the
+  same size, and zoom, pan and frame (F) work unchanged (Unity does the same).
+- **Orthographic depth spans ±1000 units around the eye,** reverse-Z like perspective so the
+  depth test is the same. The near plane is behind the eye because in orthographic the eye's
+  position is arbitrary (moving along the view direction changes nothing on screen), and
+  zooming in mustn't clip objects between the eye and the pivot. Picking rays start at that
+  near plane for the same reason. Depth precision is linear: 2000 units over a 32-bit float
+  depth is about 0.1 mm near depth 0.5.
+- **Selection outlines move along the view direction** in orthographic mode. They used to move
+  toward the eye point, which in orthographic would also slide them sideways on screen.
+- **Not done:** the ground grid is edge-on (invisible) in the Front, Back, Left and Right
+  orthographic views; Unity draws the grid in the view's own plane there. No keyboard
+  shortcuts for the views (Unity has none; Blender uses the numpad).

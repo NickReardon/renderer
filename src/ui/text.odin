@@ -89,6 +89,22 @@ draw_text :: proc(state: ^Ui_State, renderer: ^render.Renderer, text_data: clay.
 	}
 }
 
+// Draws text centred on a pixel, straight into the overlay with no layout. For labels that
+// belong to something drawn over the 3D view (the view gizmo's axis letters), so they draw in
+// order with its shapes: a knob in front covers the letter of one behind it.
+overlay_text :: proc(state: ^Ui_State, renderer: ^render.Renderer, center: [2]f32, content: string, color: [4]f32, font: Font = .Semibold, size_points: f32 = FONT_SIZE) {
+	set_font(state, font, points(state, size_points), 0)
+	width := fontstash.TextBounds(&state.font_context, content)
+	ascender, descender, _ := fontstash.VerticalMetrics(&state.font_context)
+	start_x := math.round(center.x - width * 0.5)
+	start_y := math.round(center.y - (ascender - descender) * 0.5)
+	iterator := fontstash.TextIterInit(&state.font_context, start_x, start_y, content)
+	quad: fontstash.Quad
+	for fontstash.TextIterNext(&state.font_context, &iterator, &quad) {
+		render.overlay_glyph(renderer, {quad.x0, quad.y0}, {quad.x1, quad.y1}, {quad.s0, quad.t0}, {quad.s1, quad.t1}, color)
+	}
+}
+
 // Sends new glyphs to the GPU: the changed region, or everything if the atlas grew.
 @(private)
 upload_glyph_atlas :: proc(state: ^Ui_State, renderer: ^render.Renderer) {
