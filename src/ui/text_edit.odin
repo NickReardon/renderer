@@ -171,11 +171,20 @@ edit_text :: proc(state: ^Ui_State, numbers_only: bool) -> (commit, cancel: bool
 		if keys[.A].pressed {
 			run(edit, .Select_All, &acted)
 		}
-		if fired(keys[.Z]) && !shift_held {
+		undo_pressed := fired(keys[.Z]) && !shift_held
+		redo_pressed := fired(keys[.Y]) || (fired(keys[.Z]) && shift_held)
+		if undo_pressed {
 			run(edit, .Undo, &acted)
 		}
-		if fired(keys[.Y]) || (fired(keys[.Z]) && shift_held) {
+		if redo_pressed {
 			run(edit, .Redo, &acted)
+		}
+		if undo_pressed || redo_pressed {
+			// core:text/edit groups changes less than 0.3 s apart into one undo step, timed from
+			// the last edit, and undo/redo don't restart that timer. Without this, typing right
+			// after an undo joins the edit that was undone, and the next Ctrl+Z can't take it
+			// back. Clearing it makes the next change a step of its own.
+			edit.last_edit_time = {}
 		}
 		// Copy, cut and paste go through the host's clipboard ourselves rather than through
 		// core:text/edit's callbacks, which would be procedure pointers kept in Game_Memory.

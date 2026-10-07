@@ -681,6 +681,20 @@ test_text_editing :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.I
 	testing.expect_value(test, edited_text(state), "ab")
 	key(state, input, model, .Y, ctrl = true)
 	testing.expect_value(test, edited_text(state), "abcd")
+	// Typing right after an undo or a redo is a step of its own, however quickly it follows:
+	// Ctrl+Z then takes back just that typing (found in review of #9).
+	key(state, input, model, .Z, ctrl = true)
+	type_text(input, "e")
+	run_frame(state, input, model)
+	testing.expect_value(test, edited_text(state), "abe")
+	key(state, input, model, .Z, ctrl = true)
+	testing.expect_value(test, edited_text(state), "ab")
+	key(state, input, model, .Y, ctrl = true)
+	type_text(input, "f")
+	run_frame(state, input, model)
+	testing.expect_value(test, edited_text(state), "abef")
+	key(state, input, model, .Z, ctrl = true)
+	testing.expect_value(test, edited_text(state), "abe")
 	key(state, input, model, .Escape)
 	free_all(context.temp_allocator)
 

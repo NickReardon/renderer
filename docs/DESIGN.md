@@ -797,3 +797,6 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   positions. Breaking the caret drawing or word movement makes them fail.
 - **Fixed on the way:** starting to type in a box less than 0.3 s after an edit in another box
   merged the first change into no undo step (core:text/edit's timer carried over).
+- **Fixed in review (Codex):** the same timer wasn't restarted by undo and redo either, so typing
+  within 0.3 s of the last edit after a Ctrl+Z joined the undone edit, and the next Ctrl+Z
+  couldn't take it back. Undo and redo now clear the timer; a test types right after each.
