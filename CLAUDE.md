@@ -220,6 +220,12 @@ issue is where work is claimed and handed over:
 - **Prefer designs that hot-reload.** Avoid changing `src/host/`, `src/platform/` types, the
   exported `game_*` procedures or `Game_Memory`'s layout when a game-side design works; when
   one must change, say which reload level it needs (hot reload, F6 restart, full relaunch).
+- **Settings are Editor Settings for now** (#32): preferences for how the editor looks and
+  behaves. When a change adds a setting that isn't an editor preference (it would change the
+  built game, the project's data, a simulation or an export), say so in the PR and its issue.
+  Those are the evidence for when separate Project, Rendering, Game or Export settings are
+  justified. Today's Rendering settings (VSync, MSAA, render scale, FSR) count as the editor
+  viewport's preferences, but a game build will need its own copy.
 - **Cite sources** in comments for non-obvious algorithms (see `docs/REFERENCES.md`).
 - **Entity model: hybrid fat struct** (`docs/STYLE.md` §15):
   - one `Entity` struct in a fixed pool with `Entity_Handle { index, generation }`; slot 0 is
