@@ -401,7 +401,7 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
     outward-facing, correct volumes), the vector field, selectable rows and the reflection
     inspector;
   - hot reload with a selection in place.
-- **Not yet:** renaming objects (needs a text field), multi-object editing in the
+- **Not yet:** renaming objects (done later, see "Renaming objects"), multi-object editing in the
   Inspector, and an outline silhouette.
 
 ## Review fixes (external review of 2b2380a)
@@ -622,6 +622,44 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   enough to show it. Reading last frame's layout costs one frame of delay; finding the box's
   position mid-layout isn't possible, because Clay only positions elements in `EndLayout`.
 - Only number boxes take part; checkboxes and buttons have no keyboard focus yet.
+
+## Renaming objects: one text editor shared by every box
+
+- **Renaming, Unity's two ways:** the name at the top of the Inspector is a text box, and F2
+  turns the active object's Hierarchy row into one. A click (or F2) starts typing with the
+  whole name selected; Enter, Tab or a click elsewhere apply it, Escape cancels.
+- **The name changes once, when typing is applied,** not on every keystroke. Undo then records
+  one step per rename without knowing about names (it diffs entities, see step 3), and
+  Escape has nothing to put back. `ui.typed_value_applied` covers text boxes too, so a click
+  elsewhere records the rename before that click starts its own action.
+- **Names may repeat, as in Unity** (Blender makes them unique). Only Create and Ctrl+D pick
+  unique names; renaming takes what was typed, up to 48 bytes, cut at a character boundary.
+  `set_entity_name` clears the rest of the buffer, so equal names are equal bytes and undo's
+  byte comparison sees no change in a rename that ends where it started.
+- **One editor, in `Ui_State`, shared by text and number boxes** (`ui/text_edit.odin`). Only one
+  box takes typing at a time, so the text being typed lives in one buffer with a caret and a
+  selection, and the box only holds the id that says it's the one. This is how Dear ImGui does
+  it too. The alternative, an editing state per box, would need the caller to keep it between
+  frames, which an immediate-mode widget is meant to avoid. Number boxes moved onto it and got a
+  real caret and selection; the old `[selected]` and `text|` displays are gone.
+- **Caret and selection are two byte offsets,** `edit_caret` and `edit_anchor` (the selection
+  is the range between them; Shift moves only the caret). Offsets always sit on UTF-8
+  character boundaries, which can be recognized without decoding: continuation bytes look like
+  `10xxxxxx`.
+- **The text box doesn't store its text.** It shows the string it's given and returns a
+  `Text_Box_Result` and, on `.Applied`, the new text. The caller keeps names in whatever form
+  it likes (a fixed buffer in `Entity`); the UI never holds a pointer into game data.
+- **Drawing the caret with Clay:** the edited text is drawn as up to three text elements (before
+  the selection, the selection on a highlight, after it) plus a 1-point-wide caret element, side
+  by side with no gap. A click finds the caret position by measuring each prefix with fontstash
+  and taking the nearest boundary. A test checks that Clay's layout and that measurement agree,
+  trailing spaces included, or the caret would drift from the text.
+- **A box that stops being drawn while typed into gives up the keyboard.** Otherwise a box
+  whose panel closed, or whose object went away, would keep `edit_id` and block every shortcut.
+  Boxes report being drawn (`edit_widget_drawn`); `finish_layout` drops an edit nobody drew.
+- **Not yet:** clipboard (Ctrl+C / X / V need the host to pass clipboard text both ways), word
+  jumps with Ctrl+arrows, double-click to select a word, keeping the caret visible in text
+  longer than its box, and Tab from the name box to the number boxes.
 
 ## Orthographic view and the view gizmo
 

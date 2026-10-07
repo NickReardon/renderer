@@ -55,3 +55,30 @@ test_unique_names :: proc(test: ^testing.T) {
 	// Truncation never splits a multi-byte character ("é" is 2 bytes).
 	testing.expect_value(test, truncate_utf8("café", 4), "caf")
 }
+
+@(test)
+test_rename_is_one_undo_step :: proc(test: ^testing.T) {
+	scene := new(Scene)
+	defer free(scene)
+	history := new(Undo_History)
+	defer free(history)
+
+	handle, entity := create_entity(scene, "Cube (1)")
+	reset_undo_history(history, scene)
+
+	// A shorter name clears the old tail, so renaming back gives the original bytes: undo sees
+	// no difference, and a round trip leaves nothing to record.
+	set_entity_name(entity, "Cu")
+	testing.expect_value(test, entity_name(entity), "Cu")
+	testing.expect(test, entity.name_bytes[2] == 0, "the old name's tail is cleared")
+	set_entity_name(entity, "Cube (1)")
+	testing.expect(test, !commit_undo_step(history, scene), "renaming back and forth is no change")
+
+	set_entity_name(entity, "Crate")
+	testing.expect(test, commit_undo_step(history, scene), "a rename is an undo step")
+	undo(history, scene)
+	renamed, _ := get_entity(scene, handle)
+	testing.expect_value(test, entity_name(renamed), "Cube (1)")
+	redo(history, scene)
+	testing.expect_value(test, entity_name(renamed), "Crate")
+}

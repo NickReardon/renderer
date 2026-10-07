@@ -6,6 +6,7 @@
 package ui
 
 import "core:testing"
+import fontstash "vendor:fontstash"
 import "engine:platform"
 import clay "engine:third_party/clay"
 
@@ -17,7 +18,13 @@ Test_Model :: struct {
 	row_clicks:   int,
 	tool_clicks:  int,
 	inspected:    Inspected_Data,
+	name_bytes:   [TEST_NAME_BYTES]u8, // what the text box shows and edits
+	name_length:  int,
+	name_result:  Text_Box_Result,     // the text box's result in the last frame
+	start_rename: bool,                // start typing into the text box without a click
 }
+
+TEST_NAME_BYTES :: 8
 
 // For the reflection-driven inspector: tagged fields get widgets, the untagged one doesn't.
 Inspected_Data :: struct {
@@ -47,6 +54,12 @@ run_frame :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model) 
 			model.row_clicks += 1
 		}
 		inspect(state, &model.inspected, Inspected_Data)
+		edited, result := text_box(state, "Name", string(model.name_bytes[:model.name_length]), TEST_NAME_BYTES, start_editing = model.start_rename)
+		if result == .Applied {
+			model.name_length = copy(model.name_bytes[:], edited)
+		}
+		model.name_result = result
+		model.start_rename = false
 	}
 	return finish_layout(state)
 }
@@ -124,6 +137,7 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	defer shutdown(state)
 
 	model := Test_Model{number = 1}
+	model.name_length = copy(model.name_bytes[:], "Alpha")
 	input := platform.Input{window_size = {1200, 800}, display_scale = 1, delta_seconds = 1.0 / 60}
 
 	// A first frame lays everything out; hit testing in later frames uses this layout.
@@ -139,7 +153,7 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	release_mouse(&input)
 	run_frame(state, &input, &model)
 	testing.expect(test, state.edit_id != 0, "a click should start editing")
-	testing.expect(test, state.edit_all_selected, "editing should start with the whole value selected")
+	testing.expect(test, all_text_selected(state), "editing should start with the whole value selected")
 	testing.expect(test, wants_keyboard(state), "the UI should own the keyboard while editing")
 	free_all(context.temp_allocator)
 
@@ -325,7 +339,7 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	free_all(context.temp_allocator)
 
 	// --- Tab applies the typed value and moves to the next number box, Shift+Tab to the previous
-	// one, wrapping around at either end. The box being typed into shows its text in brackets.
+	// one, wrapping around at either end. The box being typed into shows its text, all selected.
 	model.number, model.vector, model.inspected.speed = 5, {1, 2, 3}, 9
 	next_input(&input)
 	commands = run_frame(state, &input, &model)
@@ -348,15 +362,15 @@ test_widget_interaction :: proc(test: ^testing.T) {
 		_, found := find_text(commands, shown)
 		testing.expectf(test, found, "%s: expected a box showing %s", message, shown)
 	}
-	expect_editing_text(test, state, &input, &model, "[1]", "Tab from Number should edit Vector X")
+	expect_editing_text(test, state, &input, &model, "1", "Tab from Number should edit Vector X")
 	press_key(&input, .Tab)
 	run_frame(state, &input, &model)
-	expect_editing_text(test, state, &input, &model, "[2]", "Tab from X should edit Y")
+	expect_editing_text(test, state, &input, &model, "2", "Tab from X should edit Y")
 	press_key(&input, .Tab)
 	input.keys[.Left_Shift] = {down = true, pressed = true}
 	run_frame(state, &input, &model)
 	input.keys[.Left_Shift] = {}
-	expect_editing_text(test, state, &input, &model, "[1]", "Shift+Tab from Y should edit X")
+	expect_editing_text(test, state, &input, &model, "1", "Shift+Tab from Y should edit X")
 	testing.expect(test, model.vector == {1, 2, 3}, "tabbing through without typing keeps the values")
 	press_key(&input, .Escape)
 	run_frame(state, &input, &model)
@@ -372,12 +386,12 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	run_frame(state, &input, &model)
 	press_key(&input, .Tab)
 	run_frame(state, &input, &model)
-	expect_editing_text(test, state, &input, &model, "[6]", "Tab from the last box should wrap to the first")
+	expect_editing_text(test, state, &input, &model, "6", "Tab from the last box should wrap to the first")
 	press_key(&input, .Tab)
 	input.keys[.Left_Shift] = {down = true, pressed = true}
 	run_frame(state, &input, &model)
 	input.keys[.Left_Shift] = {}
-	expect_editing_text(test, state, &input, &model, "[9]", "Shift+Tab from the first box should wrap to the last")
+	expect_editing_text(test, state, &input, &model, "9", "Shift+Tab from the first box should wrap to the last")
 	press_key(&input, .Escape)
 	run_frame(state, &input, &model)
 	testing.expect(test, state.edit_id == 0, "Escape should stop editing")
@@ -406,14 +420,16 @@ test_widget_interaction :: proc(test: ^testing.T) {
 		window_height := f32(input.window_size.y)
 		testing.expectf(test, found && center.y > 0 && center.y < window_height, "%s: %s should be in the window (found %v, y %.1f)", message, shown, found, center.y)
 	}
-	expect_box_in_window(test, state, &input, &model, "[9]", "Shift+Tab wrapping to a box below the edge")
+	expect_box_in_window(test, state, &input, &model, "9", "Shift+Tab wrapping to a box below the edge")
 	press_key(&input, .Tab)
 	run_frame(state, &input, &model)
-	expect_box_in_window(test, state, &input, &model, "[6]", "Tab wrapping back to the top box")
+	expect_box_in_window(test, state, &input, &model, "6", "Tab wrapping back to the top box")
 	press_key(&input, .Escape)
 	run_frame(state, &input, &model)
 	input.window_size.y = 800
 	free_all(context.temp_allocator)
+
+	test_text_box(test, state, &input, &model)
 
 	// --- The mouse belongs to the viewport outside the panel, and to the UI over it.
 	move_mouse(&input, {100, 400})
@@ -422,5 +438,161 @@ test_widget_interaction :: proc(test: ^testing.T) {
 	move_mouse(&input, button_center)
 	run_frame(state, &input, &model)
 	testing.expect(test, wants_mouse(state), "the panel should take the mouse")
+	free_all(context.temp_allocator)
+}
+
+// The text box: typing, caret keys, limits, the mouse, and how typing ends.
+@(private = "file")
+test_text_box :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input, model: ^Test_Model) {
+	model_name :: proc(model: ^Test_Model) -> string {
+		return string(model.name_bytes[:model.name_length])
+	}
+	key :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model, key: platform.Key, shift := false) {
+		press_key(input, key)
+		if shift {
+			input.keys[.Left_Shift] = {down = true, pressed = true}
+		}
+		run_frame(state, input, model)
+		input.keys[.Left_Shift] = {}
+		input.keys[key] = {}
+	}
+	typed :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model, text: string) {
+		type_text(input, text)
+		run_frame(state, input, model)
+	}
+
+	// --- A click starts typing with all of the text selected; typing replaces it, Enter applies.
+	next_input(input)
+	run_frame(state, input, model) // the window just grew back: let the panel's scroll settle
+	commands := run_frame(state, input, model)
+	name_center, name_found := find_text(commands, "Alpha")
+	testing.expect(test, name_found, "the text box should show Alpha")
+	press_mouse(input, name_center)
+	run_frame(state, input, model)
+	release_mouse(input)
+	run_frame(state, input, model)
+	testing.expect(test, model.name_result == .Editing && all_text_selected(state), "a click starts typing, all selected")
+	typed(state, input, model, "Beta")
+	testing.expect_value(test, edited_text(state), "Beta")
+	testing.expect_value(test, model_name(model), "Alpha") // nothing applied while typing
+	key(state, input, model, .Enter)
+	testing.expect_value(test, model_name(model), "Beta")
+	testing.expect(test, model.name_result == .Applied && typed_value_applied(state), "Enter applies and reports it")
+	testing.expect(test, state.edit_id == 0, "Enter stops typing")
+	free_all(context.temp_allocator)
+
+	// --- Caret keys: Left collapses the selection to its start, typing inserts at the caret,
+	// Delete and Backspace remove one character, Shift+End selects to the end. Escape cancels.
+	model.start_rename = true // as F2 does
+	next_input(input)
+	run_frame(state, input, model)
+	testing.expect(test, model.name_result == .Editing && all_text_selected(state), "start_editing starts typing, all selected")
+	key(state, input, model, .Left)
+	typed(state, input, model, "X")
+	testing.expect_value(test, edited_text(state), "XBeta")
+	key(state, input, model, .Right)
+	key(state, input, model, .Delete) // XB|eta -> XB|ta
+	key(state, input, model, .Backspace) // XB|ta -> X|ta
+	testing.expect_value(test, edited_text(state), "Xta")
+	testing.expect_value(test, state.edit_caret, 1)
+	key(state, input, model, .End, shift = true)
+	start, end := selection_range(state)
+	testing.expect(test, start == 1 && end == 3, "Shift+End selects from the caret to the end")
+	key(state, input, model, .Delete)
+	testing.expect_value(test, edited_text(state), "X")
+	key(state, input, model, .Escape)
+	testing.expect(test, model.name_result == .Cancelled && model_name(model) == "Beta", "Escape keeps the old text")
+	testing.expect(test, !typed_value_applied(state), "a cancelled edit applies nothing")
+	free_all(context.temp_allocator)
+
+	// --- The box's byte limit holds, and a multi-byte character is one step for the caret.
+	model.start_rename = true
+	next_input(input)
+	run_frame(state, input, model)
+	typed(state, input, model, "0123456789")
+	testing.expect_value(test, edited_text(state), "01234567") // TEST_NAME_BYTES
+	key(state, input, model, .Backspace)
+	key(state, input, model, .Backspace)
+	typed(state, input, model, "é") // two bytes: fits exactly
+	testing.expect_value(test, edited_text(state), "012345é")
+	typed(state, input, model, "é") // doesn't fit, and is never cut in half
+	testing.expect_value(test, edited_text(state), "012345é")
+	key(state, input, model, .Left)
+	testing.expect_value(test, state.edit_caret, 6)
+	key(state, input, model, .Backspace)
+	key(state, input, model, .End)
+	key(state, input, model, .Backspace)
+	testing.expect_value(test, edited_text(state), "01234")
+	key(state, input, model, .Escape)
+	free_all(context.temp_allocator)
+
+	// --- The text is drawn in pieces (before the selection, the selection, after it). They must
+	// line up the way the caret is measured, trailing spaces included.
+	model.name_length = copy(model.name_bytes[:], "ab cd")
+	model.start_rename = true
+	next_input(input)
+	run_frame(state, input, model)
+	key(state, input, model, .Home)
+	key(state, input, model, .Right)
+	key(state, input, model, .Right)
+	key(state, input, model, .Right)
+	key(state, input, model, .End, shift = true) // "ab " then "cd" selected
+	next_input(input)
+	commands = run_frame(state, input, model)
+	before_box, selected_box: clay.BoundingBox
+	for command_index in 0 ..< commands.length {
+		command := clay.RenderCommandArray_Get(&commands, command_index)
+		if command.commandType != .Text {
+			continue
+		}
+		shown := command.renderData.text.stringContents
+		switch string(shown.chars[:shown.length]) {
+		case "ab ":
+			before_box = command.boundingBox
+		case "cd":
+			selected_box = command.boundingBox
+		}
+	}
+	testing.expect(test, before_box.width > 0 && selected_box.width > 0, "the text before the selection and the selection are drawn")
+	set_font(state, .Regular, points(state, FONT_SIZE), 0)
+	measured_width := fontstash.TextBounds(&state.font_context, "ab ")
+	testing.expectf(test, abs(before_box.width - measured_width) < 0.5, "the piece \"ab \" is as wide as the caret measures it (%v vs %v)", before_box.width, measured_width)
+	testing.expectf(test, abs(selected_box.x - (before_box.x + before_box.width)) < 1, "the selection starts where the text before it ends (%v vs %v)", selected_box.x, before_box.x + before_box.width)
+
+	// --- The mouse: a press in the text puts the caret there, a drag selects.
+	press_mouse(input, {before_box.x + 1, before_box.y + before_box.height * 0.5})
+	run_frame(state, input, model)
+	testing.expect_value(test, state.edit_caret, 0)
+	start, end = selection_range(state)
+	testing.expect(test, start == end, "a press clears the selection")
+	move_mouse(input, {selected_box.x + 1, selected_box.y + selected_box.height * 0.5})
+	run_frame(state, input, model)
+	start, end = selection_range(state)
+	testing.expect(test, start == 0 && end == 3, "dragging selects from the press to the pointer")
+	release_mouse(input)
+	run_frame(state, input, model)
+	testing.expect(test, model.name_result == .Editing, "pressing inside the box keeps typing going")
+
+	// --- A press elsewhere applies the text.
+	typed(state, input, model, "Z")
+	press_mouse(input, {600, 400}) // the viewport area
+	run_frame(state, input, model)
+	testing.expect_value(test, model_name(model), "Zcd")
+	testing.expect(test, model.name_result == .Applied, "a press elsewhere applies the text")
+	release_mouse(input)
+	run_frame(state, input, model)
+	free_all(context.temp_allocator)
+
+	// --- A box that stops being drawn while typed into gives the keyboard back.
+	model.start_rename = true
+	next_input(input)
+	run_frame(state, input, model)
+	testing.expect(test, wants_keyboard(state), "typing into the text box")
+	next_input(input)
+	begin_frame(state, input)
+	finish_layout(state) // a frame without the box
+	next_input(input)
+	run_frame(state, input, model)
+	testing.expect(test, state.edit_id == 0 && !wants_keyboard(state), "the keyboard is released when the box goes away")
 	free_all(context.temp_allocator)
 }

@@ -377,6 +377,8 @@ apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 		} else if strings.has_prefix(argument, "--pick-center-of=") {
 			editor := &game_memory.editor
 			editor.developer_pick_name_length = copy(editor.developer_pick_name_bytes[:], argument[len("--pick-center-of="):])
+		} else if argument == "--rename" {
+			game_memory.editor.developer_rename = true
 		} else if strings.has_prefix(argument, "--grid-width=") {
 			if width, parsed := strconv.parse_f32(argument[len("--grid-width="):]); parsed {
 				game_memory.grid_style.line_width_pixels = clamp(width, 0.25, 6)
