@@ -220,6 +220,9 @@ issue is where work is claimed and handed over:
 - **Prefer designs that hot-reload.** Avoid changing `src/host/`, `src/platform/` types, the
   exported `game_*` procedures or `Game_Memory`'s layout when a game-side design works; when
   one must change, say which reload level it needs (hot reload, F6 restart, full relaunch).
+  A relaunch while building the editor is acceptable, just not preferred: when a host or
+  layout change is the better design, make it and note the reload level once. Avoid only the
+  interruptions users of the editor would hit (e.g. a setting that needs a restart to apply).
 - **Settings are Editor Settings for now** (#32): preferences for how the editor looks and
   behaves. When a change adds a setting that isn't an editor preference (it would change the
   built game, the project's data, a simulation or an export), say so in the PR and its issue.
