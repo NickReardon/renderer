@@ -36,6 +36,7 @@ Game_Memory :: struct {
 
 	// Editor settings
 	show_grid:             bool,
+	grid_follows_view:     bool, // orthographic side views draw the grid in the plane they face
 	view_section_open:     bool,
 	camera_section_open:   bool,
 	rendering_section_open: bool,
@@ -84,6 +85,7 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 
 	game_memory.camera = default_viewport_camera()
 	game_memory.show_grid = true
+	game_memory.grid_follows_view = true
 	game_memory.stats_section_open = true
 	game_memory.editor = {hierarchy_open = true, create_section_open = true, transform_section_open = true}
 	game_memory.gizmo.tool = .Move // Unity starts with the Move tool
@@ -248,7 +250,7 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	draw_gizmo(game_memory, renderer) // before ui.end_frame, so panels draw over it
 	draw_view_gizmo(game_memory, renderer)
 
-	// The grid shows the X (red) and Z (blue) axes; add the vertical Y axis in green.
+	// The ground grid shows the X (red) and Z (blue) axes; add the vertical Y axis in green.
 	render.debug_line(renderer, {0, 0, 0}, {0, 2, 0}, {0.3, 0.85, 0.3, 1})
 
 	ui.end_frame(user_interface, renderer)
@@ -275,6 +277,7 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	captured_pixels := render.end_frame(renderer, camera, {
 		clear_color     = {0.1, 0.105, 0.12, 1},
 		show_grid       = game_memory.show_grid,
+		grid_plane      = grid_plane_for_view(game_memory.camera) if game_memory.grid_follows_view else .XZ,
 		capture         = input.capture_requested,
 		render_scale    = game_memory.render_scale,
 		upscaler        = .Fsr if render_settings.use_fsr else .Bilinear,
@@ -408,6 +411,9 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 
 		if ui.section(user_interface, "View", &memory.view_section_open) {
 			ui.checkbox(user_interface, "Show grid", &memory.show_grid)
+			if memory.show_grid {
+				ui.checkbox(user_interface, "Grid faces side views (ortho)", &memory.grid_follows_view)
+			}
 			ui.checkbox(user_interface, "Orthographic", &memory.camera.orthographic)
 			field_of_view_degrees := math.to_degrees(memory.camera.vertical_fov)
 			if ui.number_field(user_interface, "Field of view", &field_of_view_degrees, 0.2, 10, 120, "%.1f°") {

@@ -654,6 +654,11 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   depth is about 0.1 mm near depth 0.5.
 - **Selection outlines move along the view direction** in orthographic mode. They used to move
   toward the eye point, which in orthographic would also slide them sideways on screen.
-- **Not done:** the ground grid is edge-on (invisible) in the Front, Back, Left and Right
-  orthographic views; Unity draws the grid in the view's own plane there. No keyboard
-  shortcuts for the views (Unity has none; Blender uses the numpad).
+- **The grid faces orthographic side views.** The ground is edge-on (invisible) from the side,
+  so in orthographic the grid moves to the world plane the view looks at most directly: XY for
+  Front and Back, YZ for Right and Left (Unity does the same). The ground wins ties, so
+  isometric views keep it, and perspective always uses the ground, where its horizon helps.
+  The renderer only takes a `Grid_Plane` in `Frame_Settings`; the shader works in 2D plane
+  coordinates and swaps the plane's two world axes and their colours. The choice is the
+  editor's, with a checkbox to keep the ground grid.
+- **Not done:** no keyboard shortcuts for the views (Unity has none; Blender uses the numpad).

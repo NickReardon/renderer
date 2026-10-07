@@ -255,3 +255,19 @@ draw_view_gizmo :: proc(memory: ^Game_Memory, renderer: ^render.Renderer) {
 	render.overlay_rect(renderer, layout.label_min, layout.label_max, label_background, 4 * scale)
 	ui.overlay_text(user_interface, renderer, (layout.label_min + layout.label_max) * 0.5, label, {0.86, 0.86, 0.88, 1}, .Regular, 11)
 }
+
+// The plane the grid lies in. Perspective always uses the ground. Orthographic uses the world
+// plane the view looks at most directly, so the side views (where the ground is edge-on and
+// invisible) get a grid of their own: XY for Front and Back, YZ for Right and Left. The ground
+// wins ties, so the isometric corner views keep it.
+grid_plane_for_view :: proc(camera: Viewport_Camera) -> render.Grid_Plane {
+	TIE_MARGIN :: 0.01
+	if !camera.orthographic {
+		return .XZ
+	}
+	toward_viewer := linalg.abs(viewport_camera_eye_direction(camera))
+	if toward_viewer.y >= max(toward_viewer.x, toward_viewer.z) - TIE_MARGIN {
+		return .XZ
+	}
+	return .XY if toward_viewer.z >= toward_viewer.x else .YZ
+}

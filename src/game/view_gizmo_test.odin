@@ -7,6 +7,7 @@ import "core:math/linalg"
 import "core:testing"
 import "engine:core"
 import "engine:platform"
+import "engine:render"
 
 @(private = "file")
 make_view_test_memory :: proc() -> ^Game_Memory {
@@ -129,4 +130,23 @@ test_orthographic_ray_matches_projection :: proc(test: ^testing.T) {
 	near_size := viewport_camera_world_per_pixel(memory.camera, {0, 3, 0}, 800)
 	far_size := viewport_camera_world_per_pixel(memory.camera, {0, -3, 0}, 800)
 	testing.expect(test, abs(near_size - far_size) < 1e-6, "orthographic pixel size doesn't change with depth")
+}
+
+@(test)
+test_grid_plane_for_view :: proc(test: ^testing.T) {
+	camera := default_viewport_camera()
+	snap_viewport_camera(&camera, {0, 0, 1})
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // perspective: always the ground
+	camera.orthographic = true
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XY) // Front
+	snap_viewport_camera(&camera, {0, 0, -1})
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XY) // Back
+	snap_viewport_camera(&camera, {-1, 0, 0})
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.YZ) // Left
+	snap_viewport_camera(&camera, {0, 1, 0})
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // Top
+	snap_viewport_camera(&camera, {1, 1, 1})
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // isometric: the ground wins the tie
+	snap_viewport_camera(&camera, {1, 0.3, 0.2})
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.YZ) // mostly from the side
 }

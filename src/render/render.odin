@@ -49,6 +49,7 @@ Camera :: struct {
 Frame_Settings :: struct {
 	clear_color:     [4]f32,   // linear
 	show_grid:       bool,
+	grid_plane:      Grid_Plane,
 	capture:         bool,     // read this frame back to the CPU; end_frame returns the pixels
 	render_scale:    f32,      // scene resolution / viewport resolution, MIN..MAX_RENDER_SCALE; 0 = 1
 	upscaler:        Upscaler, // used when render_scale < 1
@@ -56,6 +57,14 @@ Frame_Settings :: struct {
 	vsync:           bool,
 	low_latency:     bool,     // with vsync: pace frames so input is read just in time (core.Frame_Pacing)
 	msaa_samples:    u32,      // 1 (off) or 4; anything else means 1
+}
+
+// The world plane the grid lies in, through the origin. XZ is the ground; the editor uses XY and
+// YZ for orthographic side views, where the ground is seen edge-on. Must match grid.wgsl.
+Grid_Plane :: enum u32 {
+	XZ,
+	XY,
+	YZ,
 }
 
 MIN_RENDER_SCALE :: 0.25
@@ -85,7 +94,7 @@ Frame_Uniforms :: struct {
 	camera_position: [3]f32,
 	gamma_correct:   f32,
 	light_direction: [3]f32,
-	padding:         f32,
+	grid_plane:      Grid_Plane,
 	viewport_size:   [2]f32, // pixels
 	padding_2:       [2]f32,
 }
@@ -512,6 +521,7 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		camera_position = camera.position,
 		gamma_correct   = 1 if renderer.gamma_correct else 0,
 		light_direction = linalg.normalize([3]f32{-0.4, -1, -0.3}),
+		grid_plane      = settings.grid_plane,
 		viewport_size   = surface_size,
 	}
 	wgpu.QueueWriteBuffer(renderer.queue, renderer.frame_buffer, 0, &frame_uniforms, size_of(frame_uniforms))
