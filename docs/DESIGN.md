@@ -660,3 +660,89 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
 - **Not yet:** clipboard (Ctrl+C / X / V need the host to pass clipboard text both ways), word
   jumps with Ctrl+arrows, double-click to select a word, keeping the caret visible in text
   longer than its box, and Tab from the name box to the number boxes.
+
+## Orthographic view and the view gizmo
+
+- **Unity's scene gizmo, as knobs rather than Autodesk's ViewCube.** A ViewCube's faces,
+  edges and corners never overlap each other, but it needs the cube's faces drawn and
+  hit-tested as 3D polygons. Knobs are circles at projected unit directions: six axes (X Y Z
+  filled and lettered, the negatives hollow) and eight cube corners. They're drawn far to near
+  and hit-tested near to far, so a knob behind another is reached by turning the view a
+  little, as in Unity and Blender. The centre square (projection) is drawn over all knobs:
+  in an axis or corner view the knob facing you sits exactly on it, and it must stay
+  clickable. Corner views in orthographic mode are true isometric (pitch atan(1/√2)).
+- **Snapping keeps the pivot and distance,** so what you were looking at stays centred. Top
+  and Bottom use yaw 0: in Top, +X is right and the scene's back (-Z) is up, as in Unity.
+  Snaps are animated (below).
+- **Dragging the view gizmo orbits** (as Blender's navigation gizmo does; Unity's doesn't). A
+  press on any part, or on the empty disc around the knobs, becomes a drag once the mouse moves
+  past the selection-click tolerance, and the turn is exactly Alt + left drag's
+  (`orbit_viewport_camera`). So clicks act on release, not press: on press it isn't known yet
+  whether the user is clicking or dragging. A drag keeps the mouse over panels and outside the
+  view, like a gizmo handle drag. The disc lights up on hover to show it's grabbable.
+- **The camera basis comes from yaw and pitch, not `look_at(…, WORLD_UP)`.** Crossing the
+  view direction with world up is zero when looking straight down, so the old camera clamped
+  pitch to 89.4° and a "top" view was slightly tilted, which shows in orthographic as thin
+  slivers of every side face. `right = (cos yaw, 0, -sin yaw)` is defined at the poles, so
+  pitch now reaches ±90°. The view matrix, projection, picking ray, pixel size and the
+  direction toward the viewer all come from `camera.odin` now; they were rebuilt in four
+  places before, and adding a projection mode to four copies invites a mismatch.
+- **Orthographic size is tied to `distance`:** half height = distance · tan(fov / 2), the
+  perspective view's height at the pivot. Switching modes keeps the pivot's surroundings the
+  same size, and zoom, pan and frame (F) work unchanged (Unity does the same).
+- **Orthographic depth spans ±1000 units around the eye,** reverse-Z like perspective so the
+  depth test is the same. The near plane is behind the eye because in orthographic the eye's
+  position is arbitrary (moving along the view direction changes nothing on screen), and
+  zooming in mustn't clip objects between the eye and the pivot. Picking rays start at that
+  near plane for the same reason. Depth precision is linear: 2000 units over a 32-bit float
+  depth is about 0.1 mm near depth 0.5.
+- **Selection outlines move along the view direction** in orthographic mode. They used to move
+  toward the eye point, which in orthographic would also slide them sideways on screen.
+- **The grid faces orthographic side views, by cross-fading.** The ground is edge-on (invisible)
+  from the side. In orthographic the renderer draws three grid planes (one instance each, through
+  the origin), and the editor gives each an opacity that changes smoothly with the view: the
+  ground fades out between 20° and 8° above or below it, and the vertical planes fade in,
+  shared between XY (faced from the Front or Back) and YZ (from the Right or Left) by which one
+  the view faces more. The ground-to-vertical change also follows the perspective ↔
+  orthographic animation. A first version switched planes at a threshold: correct in the
+  axis views, but orbiting across the threshold made the grid jump, which was jarring. A test
+  orbits over every angle in half-degree steps and checks no opacity moves by more than 0.05
+  and the weights always add up to 1. Perspective always uses the ground, where its horizon
+  helps. The renderer only takes `grid_opacity` per `Grid_Plane`; the shader works in 2D plane
+  coordinates, and collapses planes with zero opacity in the vertex shader.
+- **Not done:** no keyboard shortcuts for the views (Unity has none; Blender uses the numpad).
+- **Animated view changes, as in Unity.** View gizmo snaps and F move the camera over 0.3 s
+  with an ease-out (fast start, so it feels responsive). A move is a start and a target pose
+  (pivot, yaw, pitch, distance) and the time left; zero time left means "not moving", so
+  setting the camera directly (flags, tests, the Inspector) stays instant. Yaw goes the short
+  way round; distance is interpolated in log space so big zooms look even. A new move starts
+  from the current target, so F during a snap still ends in the snapped view. Orbit, pan,
+  zoom or fly stop a move where it is.
+- **Perspective ↔ orthographic is a dolly zoom,** as Unity animates it: the field of view
+  narrows toward 1° while the eye backs away so the view's height at the pivot stays the same
+  (eye distance = half height / tan(fov / 2)), then the true orthographic projection takes
+  over (indistinguishable at 1°). `viewport_camera_lens` is the one place that says how the
+  camera projects this frame; view, projection, rays and pixel size all ask it. The switch
+  uses smoothstep, not ease-out: switching back mid-way flips the time left, and only a
+  symmetric curve (s(1 - t) = 1 - s(t)) continues from the same point without a jump.
+- **Orbit always turns around the pivot,** and F puts the pivot on the selection, so after F,
+  Alt + left drag (or dragging the view gizmo) orbits the framed object. Panning and flying
+  move the pivot with the view, as in Unity.
+- **Soft depth test for the grid, after Blender** (its `overlay_grid_vert.glsl`). A face lying
+  in the grid's plane z-fought with it. First fix: nudge the grid toward the camera so it
+  always wins. Blender instead draws the grid several times at slightly different depths, from
+  just behind to just in front, each with a share of the opacity: a coplanar face keeps half
+  the passes (the grid shows on it at partial strength, steadily), and an object crossing the
+  grid gets a short fade instead of a hard, jagged cut. We draw 4 passes. Per-pass opacity is
+  1 - (1 - alpha)^(1/4), so the four blended over each other give exactly alpha. Blender adds
+  fixed amounts to clip-space z; for our reverse-Z, perspective scales the depth (a spread of
+  ±0.02% of the distance, the same safety margin at every distance) and orthographic adds a
+  small constant (±8 mm), since a relative spread there would be ±20 cm. Blender 3.6 did this
+  with one pass reading the scene depth texture; in WebGPU that needs a separate pass with a
+  read-only depth attachment, more awkward with MSAA, so we took the newer multi-pass approach.
+- **Grid lines are a width in pixels, with a colour and opacity** (Inspector › View). They were
+  a fraction of a cell (0.02), which made the 10-unit lines 0.2 units wide: 20-pixel grey bands
+  near the camera. Constant-pixel lines would merge into a solid sheet in the distance, so each
+  family of lines fades out as its cells shrink from 12 to 4 pixels apart, as Blender's grid
+  levels do. Widths under a pixel draw a fainter 1-pixel line (same average brightness, no
+  shimmer). The width is in window pixels; the renderer scales it by the render scale.

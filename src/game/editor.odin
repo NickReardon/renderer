@@ -42,6 +42,12 @@ Editor_State :: struct {
 	active_entity:        Entity_Handle, // selected last; see active_selected_entity
 	renaming_entity:      Entity_Handle, // its Hierarchy row is a text box (F2); nil when not renaming
 	rename_starting:      bool,          // F2 was just pressed: the row's text box starts typing
+	view_gizmo_hovered:   View_Gizmo_Part,
+	view_gizmo_hovered_direction: int,
+	view_gizmo_pressed:   View_Gizmo_Part, // the left button went down on this part and is still down
+	view_gizmo_pressed_direction: int,
+	view_gizmo_press_position: [2]f32,
+	view_gizmo_dragging:  bool,          // the press moved: orbiting, and no click on release
 
 	// Developer flag --pick-center-of=<name>: once the viewport is laid out, click the pixel
 	// where that entity's centre appears, through the normal picking path.
@@ -77,9 +83,16 @@ update_editor :: proc(memory: ^Game_Memory, raw_input, input: ^platform.Input, v
 		}
 	}
 
-	// The gizmo goes first: a press on a handle starts a drag instead of a selection click.
+	// The view gizmo goes first (it draws on top), then the transform gizmo: a press on either
+	// is theirs, not a selection click. `raw_input` for the view gizmo because the Hand tool
+	// turns `input`'s left button into a pan; while the view gizmo has the mouse, the view
+	// doesn't get the buttons either.
 	gizmo_was_dragging := memory.gizmo.active != .None
-	if update_gizmo(memory, raw_input if gizmo_was_dragging else input, viewport_has_mouse) {
+	if !gizmo_was_dragging && update_view_gizmo(memory, raw_input, viewport_has_mouse) {
+		editor.click_pending = false
+		memory.gizmo.hovered = .None
+		input.mouse = {}
+	} else if update_gizmo(memory, raw_input if gizmo_was_dragging else input, viewport_has_mouse) {
 		editor.click_pending = false
 		if gizmo_was_dragging {
 			return // while dragging, the gizmo owns the mouse and Escape: no clicks or shortcuts
@@ -210,9 +223,8 @@ developer_pick :: proc(memory: ^Game_Memory) {
 			continue
 		}
 		viewport_size := memory.viewport_max - memory.viewport_min
-		eye := viewport_camera_eye(memory.camera)
-		view := core.look_at(eye, memory.camera.pivot, core.WORLD_UP)
-		projection := core.perspective_reverse_z(memory.camera.vertical_fov, viewport_size.x / max(viewport_size.y, 1), 0.05)
+		view := viewport_camera_view(memory.camera)
+		projection := viewport_camera_projection(memory.camera, viewport_size.x / max(viewport_size.y, 1))
 		clip := projection * view * [4]f32{entity.position.x, entity.position.y, entity.position.z, 1}
 		normalized := clip.xy / clip.w
 		pixel := memory.viewport_min + [2]f32{(normalized.x + 1) * 0.5, (1 - normalized.y) * 0.5} * viewport_size
@@ -228,8 +240,7 @@ viewport_ray :: proc(memory: ^Game_Memory, pixel: [2]f32) -> core.Ray {
 	viewport_size := memory.viewport_max - memory.viewport_min
 	aspect_ratio := viewport_size.x / max(viewport_size.y, 1)
 	normalized := core.viewport_normalized_position(pixel, memory.viewport_min, memory.viewport_max)
-	camera := memory.camera
-	return core.ray_from_viewport(viewport_camera_eye(camera), camera.pivot, core.WORLD_UP, camera.vertical_fov, aspect_ratio, normalized)
+	return viewport_camera_ray(memory.camera, aspect_ratio, normalized)
 }
 
 // The nearest entity whose mesh the ray hits. Each mesh is tested in its own local space (the
@@ -342,20 +353,23 @@ selection_world_bounds :: proc(scene: ^Scene) -> (bounds_min, bounds_max: [3]f32
 
 // Moves the camera pivot to the selection's centre and backs off until it fits the view.
 // With nothing selected, frames the origin.
+// Animated, as in Unity. Orbiting afterwards turns around the framed object, because orbiting
+// always turns around the pivot.
 frame_selection :: proc(memory: ^Game_Memory) {
+	target := viewport_camera_target_pose(memory.camera) // keeps a view snap that's under way
 	bounds_min, bounds_max, any_selected := selection_world_bounds(&memory.scene)
 	if !any_selected {
-		memory.camera.pivot = {0, 0, 0}
-		memory.camera.distance = 7
+		target.pivot, target.distance = {0, 0, 0}, 7
+		move_viewport_camera(&memory.camera, target)
 		return
 	}
-	center := (bounds_min + bounds_max) * 0.5
 	radius := max(linalg.length(bounds_max - bounds_min) * 0.5, 0.1)
-	memory.camera.pivot = center
+	target.pivot = (bounds_min + bounds_max) * 0.5
 	// Back off until the bounding sphere fits both the vertical and horizontal field of view.
 	viewport_size := memory.viewport_max - memory.viewport_min
 	aspect_ratio := viewport_size.x / max(viewport_size.y, 1) if viewport_size.x > 0 else 1
-	memory.camera.distance = core.distance_to_fit_sphere(radius, memory.camera.vertical_fov, aspect_ratio) * 1.1
+	target.distance = core.distance_to_fit_sphere(radius, memory.camera.vertical_fov, aspect_ratio) * 1.1
+	move_viewport_camera(&memory.camera, target)
 }
 
 // Draws the selected objects' edges in orange, pulled very slightly toward the camera so they
@@ -363,7 +377,7 @@ frame_selection :: proc(memory: ^Game_Memory) {
 // that comes later.)
 draw_selection_outlines :: proc(memory: ^Game_Memory, renderer: ^render.Renderer) {
 	scene := &memory.scene
-	eye := viewport_camera_eye(memory.camera)
+	camera := memory.camera
 	for slot_index in 1 ..= scene.highest_entity_slot {
 		entity := &scene.entities[slot_index]
 		if !(.Alive in entity.flags) || !(.Selected in entity.flags) || !(.Has_Mesh in entity.flags) {
@@ -378,17 +392,19 @@ draw_selection_outlines :: proc(memory: ^Game_Memory, renderer: ^render.Renderer
 		for face_index in 0 ..< core.face_count(geometry) {
 			corners := core.face_corners(geometry, face_index)
 			for corner_index in 0 ..< len(corners) {
-				start := outline_point(world, geometry.positions[corners[corner_index]], eye)
-				end := outline_point(world, geometry.positions[corners[(corner_index + 1) % len(corners)]], eye)
+				start := outline_point(world, geometry.positions[corners[corner_index]], camera)
+				end := outline_point(world, geometry.positions[corners[(corner_index + 1) % len(corners)]], camera)
 				render.debug_line(renderer, start, end, SELECTION_OUTLINE_COLOR)
 			}
 		}
 	}
 
-	outline_point :: proc(world: matrix[4, 4]f32, local_position: [3]f32, eye: [3]f32) -> [3]f32 {
+	outline_point :: proc(world: matrix[4, 4]f32, local_position: [3]f32, camera: Viewport_Camera) -> [3]f32 {
 		world_position := (world * [4]f32{local_position.x, local_position.y, local_position.z, 1}).xyz
-		to_eye := eye - world_position
-		return world_position + to_eye * 0.002 // 0.2% of the way to the camera
+		// 0.2% of the distance to the eye, toward the viewer. (Along the view direction in
+		// orthographic mode, so the line moves in depth only, not sideways on screen.)
+		distance_to_eye := linalg.length(viewport_camera_eye(camera) - world_position)
+		return world_position + viewport_camera_toward_viewer(camera, world_position) * distance_to_eye * 0.002
 	}
 }
 

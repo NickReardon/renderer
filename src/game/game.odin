@@ -36,6 +36,8 @@ Game_Memory :: struct {
 
 	// Editor settings
 	show_grid:             bool,
+	grid_follows_view:     bool, // orthographic side views draw the grid in the plane they face
+	grid_style:            render.Grid_Style,
 	view_section_open:     bool,
 	camera_section_open:   bool,
 	rendering_section_open: bool,
@@ -69,6 +71,8 @@ Render_Settings :: struct {
 
 SCALE_ADJUST_INTERVAL_FRAMES :: 8 // let a few new GPU measurements arrive between adjustments
 
+DEFAULT_GRID_STYLE :: render.Grid_Style{color = {0.45, 0.45, 0.45}, opacity = 0.3, line_width_pixels = 1}
+
 game_memory: ^Game_Memory
 
 @(export)
@@ -84,6 +88,8 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 
 	game_memory.camera = default_viewport_camera()
 	game_memory.show_grid = true
+	game_memory.grid_follows_view = true
+	game_memory.grid_style = DEFAULT_GRID_STYLE
 	game_memory.stats_section_open = true
 	game_memory.editor = {hierarchy_open = true, create_section_open = true, transform_section_open = true}
 	game_memory.gizmo.tool = .Move // Unity starts with the Move tool
@@ -124,6 +130,32 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 			game_memory.gizmo.local_orientation = true
 		case "--center":
 			game_memory.gizmo.handle_position = .Center
+		case "--ortho":
+			game_memory.camera.orthographic = true
+		case "--switch-projection":
+			switch_viewport_projection(&game_memory.camera) // animated, for capturing frames mid-switch
+		case "--view=right", "--view=left", "--view=top", "--view=bottom", "--view=front", "--view=back":
+			view_names := VIEW_GIZMO_AXIS_VIEW_NAMES
+			directions := VIEW_GIZMO_DIRECTIONS
+			for name, axis_index in view_names {
+				if strings.equal_fold(argument[len("--view="):], name) {
+					snap_viewport_camera(&game_memory.camera, directions[axis_index])
+				}
+			}
+		case "--view=corner":
+			snap_viewport_camera(&game_memory.camera, {1, 1, 1})
+		}
+		// --camera=45,14: yaw and pitch in degrees, for views between the presets.
+		if strings.has_prefix(argument, "--camera=") {
+			angles := strings.split(argument[len("--camera="):], ",", context.temp_allocator)
+			if len(angles) == 2 {
+				yaw_degrees, yaw_parsed := strconv.parse_f32(angles[0])
+				pitch_degrees, pitch_parsed := strconv.parse_f32(angles[1])
+				if yaw_parsed && pitch_parsed {
+					game_memory.camera.yaw = math.to_radians(yaw_degrees)
+					game_memory.camera.pitch = math.to_radians(clamp(pitch_degrees, -90, 90))
+				}
+			}
 		}
 	}
 	return true
@@ -234,8 +266,9 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	}
 	draw_selection_outlines(game_memory, renderer)
 	draw_gizmo(game_memory, renderer) // before ui.end_frame, so panels draw over it
+	draw_view_gizmo(game_memory, renderer)
 
-	// The grid shows the X (red) and Z (blue) axes; add the vertical Y axis in green.
+	// The ground grid shows the X (red) and Z (blue) axes; add the vertical Y axis in green.
 	render.debug_line(renderer, {0, 0, 0}, {0, 2, 0}, {0.3, 0.85, 0.3, 1})
 
 	ui.end_frame(user_interface, renderer)
@@ -249,11 +282,11 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	game_memory.viewport_min, game_memory.viewport_max = viewport_min, viewport_max
 	viewport_size := viewport_max - viewport_min
 	aspect_ratio := viewport_size.x / max(viewport_size.y, 1)
-	eye := viewport_camera_eye(game_memory.camera)
 	camera := render.Camera{
-		view         = core.look_at(eye, game_memory.camera.pivot, core.WORLD_UP),
-		projection   = core.perspective_reverse_z(game_memory.camera.vertical_fov, max(aspect_ratio, 0.01), 0.05),
-		position     = eye,
+		view         = viewport_camera_view(game_memory.camera),
+		projection   = viewport_camera_projection(game_memory.camera, aspect_ratio),
+		position     = viewport_camera_eye(game_memory.camera),
+		orthographic = viewport_camera_lens(game_memory.camera).orthographic,
 		viewport_min = viewport_min,
 		viewport_max = viewport_max,
 	}
@@ -263,6 +296,8 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	captured_pixels := render.end_frame(renderer, camera, {
 		clear_color     = {0.1, 0.105, 0.12, 1},
 		show_grid       = game_memory.show_grid,
+		grid_plane_opacity = grid_opacity_for_view(game_memory.camera) if game_memory.grid_follows_view else {.XZ = 1, .XY = 0, .YZ = 0},
+		grid_style      = game_memory.grid_style,
 		capture         = input.capture_requested,
 		render_scale    = game_memory.render_scale,
 		upscaler        = .Fsr if render_settings.use_fsr else .Bilinear,
@@ -321,6 +356,7 @@ effective_target_frame_rate :: proc(settings: Render_Settings, input: ^platform.
 //   --dynamic            dynamic resolution on
 //   --msaa=off           no multisample anti-aliasing
 //   --pick-center-of=Sphere  click the named object's centre once the view is laid out
+//   --grid-width=3       grid line width in pixels
 apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 	for argument in arguments {
 		if strings.has_prefix(argument, "--render-scale=") {
@@ -343,6 +379,10 @@ apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 			editor.developer_pick_name_length = copy(editor.developer_pick_name_bytes[:], argument[len("--pick-center-of="):])
 		} else if argument == "--rename" {
 			game_memory.editor.developer_rename = true
+		} else if strings.has_prefix(argument, "--grid-width=") {
+			if width, parsed := strconv.parse_f32(argument[len("--grid-width="):]); parsed {
+				game_memory.grid_style.line_width_pixels = clamp(width, 0.25, 6)
+			}
 		}
 	}
 }
@@ -398,6 +438,20 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 
 		if ui.section(user_interface, "View", &memory.view_section_open) {
 			ui.checkbox(user_interface, "Show grid", &memory.show_grid)
+			if memory.show_grid {
+				ui.checkbox(user_interface, "Grid faces side views (ortho)", &memory.grid_follows_view)
+				ui.color_field(user_interface, "Grid color", &memory.grid_style.color)
+				ui.number_field(user_interface, "Grid opacity", &memory.grid_style.opacity, 0.005, 0, 1, "%.2f")
+				ui.number_field(user_interface, "Line width", &memory.grid_style.line_width_pixels, 0.01, 0.25, 6, "%.2f px")
+				if ui.button(user_interface, "Reset grid style") {
+					memory.grid_style = DEFAULT_GRID_STYLE
+				}
+			}
+			// The checkbox only shows the setting; a click switches it with the animation.
+			orthographic := memory.camera.orthographic
+			if ui.checkbox(user_interface, "Orthographic", &orthographic) {
+				switch_viewport_projection(&memory.camera)
+			}
 			field_of_view_degrees := math.to_degrees(memory.camera.vertical_fov)
 			if ui.number_field(user_interface, "Field of view", &field_of_view_degrees, 0.2, 10, 120, "%.1f°") {
 				memory.camera.vertical_fov = math.to_radians(field_of_view_degrees)
@@ -410,7 +464,7 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 				memory.camera.yaw = math.to_radians(yaw_degrees)
 			}
 			pitch_degrees := math.to_degrees(memory.camera.pitch)
-			if ui.number_field(user_interface, "Pitch", &pitch_degrees, 0.5, -89, 89, "%.1f°") {
+			if ui.number_field(user_interface, "Pitch", &pitch_degrees, 0.5, -90, 90, "%.1f°") {
 				memory.camera.pitch = math.to_radians(pitch_degrees)
 			}
 			ui.number_field(user_interface, "Distance", &memory.camera.distance, 0.05, 0.1, 1000, "%.2f")

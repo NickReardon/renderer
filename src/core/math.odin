@@ -168,3 +168,24 @@ perspective_reverse_z :: proc(vertical_fov, aspect_ratio, near: f32) -> matrix[4
 		0,                          0,           -1, 0,
 	}
 }
+
+// Orthographic projection with reverse-Z: `half_height` world units above and below the view's
+// centre fill the viewport, at every distance. `near` and `far` are distances in front of the
+// eye; near may be negative (behind the eye), which the editor uses so that zooming in never
+// clips objects between the eye and the pivot.
+//
+// For a view-space point (x, y, z, 1) this gives w = 1 (no perspective divide) and
+//   depth = (z + far) / (far - near)
+// which is 1 at z = -near and 0 at z = -far, falling linearly in between. Depth precision is
+// spread evenly, so reverse-Z buys nothing here; it's kept so the depth test (.Greater, clear
+// to 0) is the same for both projections.
+orthographic_reverse_z :: proc(half_height, aspect_ratio, near, far: f32) -> matrix[4, 4]f32 {
+	assert(half_height > 0 && aspect_ratio > 0 && far > near)
+	depth_range := far - near
+	return matrix[4, 4]f32{
+		1 / (half_height * aspect_ratio), 0,               0,               0,
+		0,                                1 / half_height, 0,               0,
+		0,                                0,               1 / depth_range, far / depth_range,
+		0,                                0,               0,               1,
+	}
+}
