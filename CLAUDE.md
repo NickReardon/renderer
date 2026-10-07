@@ -28,6 +28,13 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --flatten=Sphere        scale Y = 0 on the named object (zero-scale check)
   --tool=rotate           start with a tool (hand, move, rotate, scale); --local for Local axes
   --center                start in Center mode (gizmo at the selection's middle) instead of Pivot
+  --ortho                 start in orthographic projection
+  --view=top              start in an axis view (right, left, top, bottom, front, back), or
+                          --view=corner for the +X +Y +Z corner (isometric with --ortho)
+  --switch-projection     start the animated switch to orthographic (capture it with
+                          --screenshot-frame=N)
+  --camera=45,14          start at this yaw and pitch, in degrees
+  --grid-width=3          grid line width in pixels
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't
@@ -63,6 +70,8 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
 - **Editor UX follows Unity's scene view:**
   - navigation: Alt+left orbit, middle pan, Alt+right or wheel zoom, right-drag fly with
     WASD/QE, F to frame;
+  - the view gizmo (top right) snaps to axis and corner views, and dragging it orbits; its
+    centre switches perspective / orthographic;
   - transform gizmos (move, rotate, scale handles) and the QWERTY tool keys when the editor
     gets them;
   - all of it in our right-handed, Y-up space.
@@ -75,7 +84,8 @@ src/host/      executable: SDL3 window, input, main loop, hot reload; only packa
 src/game/      editor + game, hot-reloaded DLL; all persistent state in Game_Memory
                game.odin (frame, settings, panels), scene.odin (entities, mesh assets),
                editor.odin (selection, picking, Hierarchy, Inspector, shortcuts), camera.odin,
-               gizmo.odin (Q W E R transform tools), undo.odin (Ctrl+Z / Ctrl+Y)
+               gizmo.odin (Q W E R transform tools), undo.odin (Ctrl+Z / Ctrl+Y),
+               view_gizmo.odin (axis and corner views, perspective / orthographic)
 src/render/    renderer; only package using wgpu (render.odin API, device.odin, pipelines.odin, shaders/)
 src/ui/        immediate-mode UI; only package using Clay and fontstash; draws via render's overlay API
 src/core/      math and mesh; imports no engine package, no GPU or OS code; tests in core_test.odin

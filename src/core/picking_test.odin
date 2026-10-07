@@ -89,3 +89,17 @@ test_ray_plane_intersection :: proc(test: ^testing.T) {
 	_, hit = ray_plane_intersection({origin = {0, 5, 0}, direction = {0, 1, 0}}, {0, 1, 0}, {0, 1, 0})
 	testing.expect(test, !hit, "a plane behind the ray misses")
 }
+
+@(test)
+test_ray_from_viewport_orthographic :: proc(test: ^testing.T) {
+	eye := [3]f32{0, 0, 10}
+	target := [3]f32{0, 0, 0}
+
+	// Every ray points straight ahead; only the origin moves across the view.
+	center := ray_from_viewport_orthographic(eye, target, WORLD_UP, 3, 2, {0, 0})
+	testing.expect(test, linalg.length(center.origin - eye) < EPSILON, "centre ray starts at the eye")
+	testing.expect(test, linalg.length(center.direction - [3]f32{0, 0, -1}) < EPSILON, "centre ray points down -Z")
+	corner := ray_from_viewport_orthographic(eye, target, WORLD_UP, 3, 2, {1, -1})
+	testing.expect(test, linalg.length(corner.origin - [3]f32{6, -3, 10}) < EPSILON, "bottom-right ray starts half a view (aspect * 3, -3) away")
+	testing.expect(test, linalg.length(corner.direction - center.direction) < EPSILON, "rays are parallel")
+}

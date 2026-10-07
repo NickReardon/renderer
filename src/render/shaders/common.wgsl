@@ -6,9 +6,12 @@ struct Frame {
 	camera_position: vec3f,
 	gamma_correct:   f32,   // 1 when the surface isn't sRGB and we must encode manually
 	light_direction: vec3f, // direction light travels, normalized
-	padding:         f32,
+	orthographic:    f32,   // 1 for an orthographic projection
 	viewport_size:   vec2f, // pixels
-	padding_2:       vec2f,
+	grid_line_width: f32,   // render-target pixels
+	padding:         f32,
+	grid_plane_opacity: vec4f, // per grid plane: x = XZ (ground), y = XY, z = YZ
+	grid_color:      vec4f, // linear rgb, and the 1-unit lines' opacity
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
