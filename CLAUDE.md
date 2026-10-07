@@ -163,8 +163,17 @@ issue is where work is claimed and handed over:
   check it isn't labeled `in-progress` (someone else has it).
 - **Claim it:** add the `in-progress` label and comment the branch name
   (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`).
-- **Name the branch with the issue number:** `feature/<n>-<name>`, `fix/<n>-<name>`.
-- **Write `Fixes #<n>` in the pull request,** so merging it closes the issue.
+- **Docs first, merged before the work.** For work with design choices (features, architecture),
+  write the planned design on its own `docs/<n>-<name>` branch and open a PR. In it, add a
+  section to `docs/DESIGN.md` (until #26 splits it): what will be built, the options and the
+  choice. Get it merged to `main` before starting the implementation, so the plan is reviewed
+  and every agent reads the same intended design. The implementation branch starts from that
+  `main`, and its PR updates the doc to match what was actually built. Plain bug fixes and
+  trivial changes don't need a docs PR.
+- **Name the branch with the issue number:** `docs/<n>-<name>` for the design, then
+  `feature/<n>-<name>` or `fix/<n>-<name>` for the work.
+- **Write `Fixes #<n>` in the implementation pull request,** so merging it closes the issue (the
+  docs PR says `Part of #<n>`).
 - **Stopping partway:** comment where things stand (what's done, what's failing, what's next)
   and remove the `in-progress` label, so the next agent can pick it up.
 - **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
@@ -179,8 +188,9 @@ issue is where work is claimed and handed over:
   "closed mesh stays closed").
 - **Ask before adding any dependency,** including another `vendor:` package.
 - **End each change with a short explanation** of why it is built the way it is, aimed at someone
-  learning these techniques. Record real design decisions (choices between alternatives) in
-  `docs/DESIGN.md`.
+  learning these techniques. Design decisions (choices between alternatives) are written up in
+  `docs/DESIGN.md` before the work, in a docs PR (see "Docs first" above), and corrected in
+  the implementation PR.
 - **Keep changes to one milestone at a time;** don't build ahead of what was asked.
 - **Ideas outside the current branch's scope become GitHub issues,** not part of the branch:
   recommend them, file an issue (what, why, roughly how, an `area:` label), and keep the branch
