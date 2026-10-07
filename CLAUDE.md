@@ -139,13 +139,14 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
 - **Never commit to `main` directly.** `main` always builds and passes `build.bat test`.
 - **One branch per milestone or fix,** created from an up-to-date `main`:
   `feature/<name>` (e.g. `feature/undo`), `fix/<name>`, `docs/<name>`, `chore/<name>`.
-- **Commit on the branch as you go,** push it, and open a pull request with `gh pr create`. The
-  description says what changed and why, how it was verified (build, tests, captures), and
-  what's not done. End it with the Claude Code attribution line.
+- **For implementation and other code work,** commit on the task branch as you go, push it, and
+  open a pull request with `gh pr create`. The description says what changed and why, how it was
+  verified (build, tests, captures), and what's not done. End it with the Claude Code attribution
+  line. Design proposals use the GitHub-only process below.
 - **Merge only after the build and all tests pass and the owner approves.** The repository
   allows **squash merges only** (`gh pr merge --squash`): each pull request becomes one commit on
-  `main`, and GitHub deletes the branch. Afterwards: `git switch main`, `git pull`, and delete the
-  local branch.
+  `main`, and GitHub deletes the branch. Afterwards, remove the task worktree, delete its local
+  branch after confirming the squash merge, and pull GitHub `main` into the main checkout.
 - **Never force-push `main` or rewrite pushed history.**
 - **Commits use the GitHub no-reply address** (`32754140+NickReardon@users.noreply.github.com`,
   set in this repository's git config) because the owner's account blocks pushes that expose
@@ -161,22 +162,22 @@ issue is where work is claimed and handed over:
 
 - **Before starting,** read the issue and its comments (`gh issue view <n> --comments`), and
   check it isn't labeled `in-progress` (someone else has it).
-- **Claim it:** add the `in-progress` label and comment the branch name
-  (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`).
-- **Docs first, merged before the work.** For work with design choices (features, architecture),
-  write a first pass of the design on its own `docs/<n>-<name>` branch and open a PR:
-  - **high level, preferably:** what we intend to build and why, the main choice and the options
-    considered. Details are worked out during the work;
-  - in a section of `docs/DESIGN.md` (until #26 splits it), starting with
-    **Status: Proposed** and a link to the issue. The issue, not the doc, shows who is working
-    on it, on which branch, and the PRs, so the doc can't go stale when a branch changes.
+- **Claim it:** add the `in-progress` label and comment that work has started
+  (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`). Add the
+  docs or implementation branch name to the issue when that branch is created.
+- **Docs first, merged before implementation.** For work with design choices (features,
+  architecture), draft a high-level proposal in the GitHub issue: what we intend to build and
+  why, the main choice, and options considered. Discuss it there and get the owner's approval.
+  Then use GitHub's web editor or API to create a `docs/<n>-<name>` branch and docs PR. Edit the
+  proposal on GitHub; do not use a local docs worktree, local file writes, or a push for it.
+  Add a section to `docs/DESIGN.md` (until #26 splits it) with **Status: Proposed** and a link to
+  the issue. The issue tracks the discussion, owner, branches, and PRs.
 
-  Wait for the owner to approve and merge it before starting the implementation, so the plan
-  is reviewed and every agent reads the same intended design. The implementation branch starts
-  from that `main`; its PR updates the doc to match what was actually built, with the detail
-  that only became clear while building, and sets the status to **Accepted**. A design that a
-  later one replaces becomes **Superseded by …** (a link). Plain bug fixes and trivial changes
-  don't need a docs PR.
+  Wait for the owner to approve and merge the docs PR before starting implementation, so every
+  agent reads the same intended design. The implementation branch starts from updated `main`;
+  its PR updates the design to match what was built, adds details learned during the work, and
+  sets the status to **Accepted**. A later replacement becomes **Superseded by …** (a link).
+  Plain bug fixes and trivial changes do not need this process.
 - **Name the branch with the issue number:** `docs/<n>-<name>` for the design, then
   `feature/<n>-<name>` or `fix/<n>-<name>` for the work.
 - **Write `Fixes #<n>` in the implementation pull request,** so merging it closes the issue (the
@@ -185,11 +186,16 @@ issue is where work is claimed and handed over:
   and remove the `in-progress` label, so the next agent can pick it up.
 - **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
   GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears.
-- **The main checkout (`D:\Renderer`) stays on `main`;** it's for reading and pulling. Every
-  task, docs PRs included, runs in its own git worktree under `.claude/worktrees/`
-  (`git worktree add .claude/worktrees/<branch> -b <branch> origin/main`), so no session ever
-  switches branches under another one. Don't `git switch` in the main checkout, and remove a
-  task's worktree once its PR is merged (`git worktree remove`).
+- **The main checkout (`D:\Renderer`) stays on `main`.** Pull GitHub `main` into it before
+  creating a code worktree: `git -C D:\Renderer pull --ff-only origin main`. Create each
+  implementation or other code task in its own worktree under `.claude/worktrees/`, branching
+  from that updated local `main` (`git -C D:\Renderer worktree add
+  .claude/worktrees/<task-name> -b <branch> main`). Never switch branches in the main checkout.
+  Before opening or updating a task PR, pull GitHub `main` into the main checkout again, merge
+  that `main` into the task branch in its worktree, resolve conflicts, and rerun affected checks.
+  Merge rather than rebase an already pushed task branch, so its history is not rewritten.
+  Remove the task worktree after its PR is merged (`git worktree remove`). Docs proposals use
+  GitHub directly as described above.
 
 ## How to work
 
