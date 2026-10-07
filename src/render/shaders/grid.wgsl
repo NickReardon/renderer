@@ -11,6 +11,20 @@
 
 const GRID_EXTENT: f32 = 500.0; // half-size of the quad, in world units
 
+// The grid wins depth ties with faces lying in its plane (the bottom of a cube on the ground, a
+// Plane object), instead of flickering with them ("z-fighting": both land on the same depth and
+// rounding picks a winner pixel by pixel). Its depth is scaled up by this fraction, which moves
+// it toward the camera:
+//   - perspective (depth = near / distance): by this fraction of its distance, 0.02 mm at 1 m,
+//     2 mm at 100 m, always about 170 times the depth buffer's relative precision (2^-23);
+//   - orthographic (depth falls linearly over 2000 units): by about 2 cm near the pivot, about
+//     170 times the precision there.
+// The fixed depth bias of the pipeline can't do this: on a float depth buffer it's about the
+// same absolute amount at every distance, too small near the camera and, far away, larger than
+// the gap to objects resting on the grid. The cost of the nudge: a face closer to the plane than
+// the nudge (but not in it) also shows the grid through it, which is invisible in practice.
+const GRID_DEPTH_NUDGE: f32 = 0.00002;
+
 const AXIS_X_COLOR = vec3f(0.85, 0.2, 0.2);
 const AXIS_Y_COLOR = vec3f(0.3, 0.8, 0.3);
 const AXIS_Z_COLOR = vec3f(0.2, 0.4, 0.9);
@@ -44,6 +58,7 @@ fn vertex_main(@builtin(vertex_index) vertex_index: u32, @builtin(instance_index
 	let world_position = axes * plane_position;
 	var output: Vertex_Output;
 	output.clip_position = frame.view_projection * vec4f(world_position, 1.0);
+	output.clip_position.z *= 1.0 + GRID_DEPTH_NUDGE; // depth = z / w, so this scales the depth
 	output.plane_position = plane_position;
 	output.plane = plane;
 	if (frame.grid_opacity[plane] <= 0.0) {

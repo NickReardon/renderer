@@ -690,3 +690,11 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
 - **Orbit always turns around the pivot,** and F puts the pivot on the selection, so after F,
   Alt + left drag (or dragging the view gizmo) orbits the framed object. Panning and flying
   move the pivot with the view, as in Unity.
+- **The grid wins depth ties with faces in its plane** (a cube's bottom on the ground, a Plane
+  object), instead of z-fighting with them. The grid's vertex shader scales its depth by
+  1 + 0.00002, moving it toward the camera by that fraction of its distance in perspective
+  (about 170 times reverse-Z's relative precision, at every distance) and about 2 cm near the
+  pivot in orthographic. Not the pipeline's depth bias: on a float depth buffer that's roughly
+  one absolute amount everywhere, too small up close and too big far away. Checked from below
+  the ground: before, the cube's bottom hid the grid lines (with stray specks); after, they
+  run across it.
