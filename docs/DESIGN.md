@@ -125,7 +125,11 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
   - each build replaces `game.dll`, and the host loads a *copy* (`game_<n>.dll`) so the file
     stays writable;
   - persistent state is one `Game_Memory` block passed to each new DLL;
-  - if `size_of(Game_Memory)` changes, the game restarts instead (F6 forces a restart);
+  - if `Game_Memory`'s layout changes, the game restarts instead (F6 forces a restart). Each
+    build exports a hash of the layout (`game_memory_layout_hash`, built by
+    `core.type_layout_hash` from Odin's runtime type info: field names, offsets and types,
+    enum values, union variants, and everything reached through pointers, slices, dynamic
+    arrays and maps), and the host compares the running build's hash with the new one's;
   - old DLLs stay loaded until exit;
   - shaders are embedded in the DLL with `#load` and rebuilt on reload inside a validation
     error scope, so a broken shader reports its error and the last working pipelines stay.
@@ -135,8 +139,14 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
     state;
   - the build writes `game_tmp.dll` and renames it, so the host never sees a half-written file;
   - a unique PDB name per build avoids link failures while a previous build is loaded.
-- **Known limit:** a change that keeps `Game_Memory`'s size but changes its layout (e.g. swapping
-  two fields of the same type) is not detected; press F6.
+- **Why a layout hash, not the size** (#13): the host used to compare `size_of(Game_Memory)`,
+  which misses changes that keep the size (two fields swapped, an `f32` that became an `i32`,
+  an enum reordered), and the new code then silently misread the old memory. The hash also
+  changes when a field or type is only renamed: a needless restart loses editor state, a wrong
+  reload corrupts it.
+- **Known limits:** changes the type system can't see are not detected: a field whose meaning
+  changes but not its type (degrees to radians), or bytes behind a `rawptr` or a `[]u8` buffer
+  (Clay's arena). Press F6 after those.
 - **Verified:** reloading with unchanged code, with a deliberately broken shader (error printed
   with the right file line, old pipelines kept) and with the fix, all while the engine ran.
 
