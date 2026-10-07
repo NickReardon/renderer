@@ -33,6 +33,7 @@ Button :: struct {
 }
 
 MAX_TEXT_INPUT_BYTES :: 64
+MAX_CLIPBOARD_BYTES  :: 256
 
 Input :: struct {
 	keys:              [Key]Button,
@@ -51,10 +52,34 @@ Input :: struct {
 	// Use this for text fields; use `keys` for shortcuts.
 	text_input:        [MAX_TEXT_INPUT_BYTES]u8,
 	text_input_length: int,
+
+	// The clipboard's text, read only on frames where Ctrl+V is pressed (reading it can be slow),
+	// cut to MAX_CLIPBOARD_BYTES on a character boundary. Empty on other frames.
+	clipboard_text:        [MAX_CLIPBOARD_BYTES]u8,
+	clipboard_text_length: int,
 }
 
 input_text :: proc(input: ^Input) -> string {
 	return string(input.text_input[:input.text_input_length])
+}
+
+input_clipboard_text :: proc(input: ^Input) -> string {
+	return string(input.clipboard_text[:input.clipboard_text_length])
+}
+
+// The mouse cursor's shape.
+Cursor :: enum u8 {
+	Default, // the arrow
+	Text,    // the I-beam, over text that can be typed into
+}
+
+// What the game asks the host to do after a frame: the counterpart of Input. The host clears it
+// before each frame and applies it after.
+Output :: struct {
+	cursor:                Cursor,
+	set_clipboard:         bool, // put clipboard_text on the clipboard (Ctrl+C, Ctrl+X)
+	clipboard_text:        [MAX_CLIPBOARD_BYTES]u8,
+	clipboard_text_length: int,
 }
 
 // OS-level window handles, enough for the renderer to create a GPU surface. The host builds

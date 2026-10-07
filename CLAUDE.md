@@ -25,6 +25,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --target-fps=120        dynamic resolution's target (default: display refresh rate)
   --pick-center-of=Sphere click the named object's centre (tests picking end to end)
   --rename                after the pick, press F2 (the Hierarchy row becomes a text box)
+  --rename-type=TEXT      like --rename, then type TEXT into the box
   --mirror=Cube           scale X = -1 on the named object (mirrored-transform check)
   --flatten=Sphere        scale Y = 0 on the named object (zero-scale check)
   --tool=rotate           start with a tool (hand, move, rotate, scale); --local for Local axes
@@ -80,7 +81,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
 ## Package layout
 
 ```
-src/platform/  plain shared types (Input, Native_Window); no procedures, importable by all
+src/platform/  plain shared types (Input, Output, Native_Window); no procedures, importable by all
 src/host/      executable: SDL3 window, input, main loop, hot reload; only package using SDL
 src/game/      editor + game, hot-reloaded DLL; all persistent state in Game_Memory
                game.odin (frame, settings, panels), scene.odin (entities, mesh assets),
