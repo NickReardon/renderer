@@ -128,6 +128,8 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 			game_memory.gizmo.handle_position = .Center
 		case "--ortho":
 			game_memory.camera.orthographic = true
+		case "--switch-projection":
+			switch_viewport_projection(&game_memory.camera) // animated, for capturing frames mid-switch
 		case "--view=right", "--view=left", "--view=top", "--view=bottom", "--view=front", "--view=back":
 			view_names := VIEW_GIZMO_AXIS_VIEW_NAMES
 			directions := VIEW_GIZMO_DIRECTIONS
@@ -414,7 +416,11 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 			if memory.show_grid {
 				ui.checkbox(user_interface, "Grid faces side views (ortho)", &memory.grid_follows_view)
 			}
-			ui.checkbox(user_interface, "Orthographic", &memory.camera.orthographic)
+			// The checkbox only shows the setting; a click switches it with the animation.
+			orthographic := memory.camera.orthographic
+			if ui.checkbox(user_interface, "Orthographic", &orthographic) {
+				switch_viewport_projection(&memory.camera)
+			}
 			field_of_view_degrees := math.to_degrees(memory.camera.vertical_fov)
 			if ui.number_field(user_interface, "Field of view", &field_of_view_degrees, 0.2, 10, 120, "%.1f°") {
 				memory.camera.vertical_fov = math.to_radians(field_of_view_degrees)

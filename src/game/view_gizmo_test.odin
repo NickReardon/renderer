@@ -19,11 +19,13 @@ make_view_test_memory :: proc() -> ^Game_Memory {
 }
 
 @(private = "file")
-// A press and, on the next frame, a release at the same pixel. Clicks act on the release.
+// A press and, on the next frame, a release at the same pixel. Clicks act on the release; the
+// animation it starts is then run to the end.
 click_at :: proc(memory: ^Game_Memory, pixel: [2]f32) -> (owned: bool) {
 	owned = press_at(memory, pixel)
 	release := mouse_frame(pixel, {}, false, false)
 	update_view_gizmo(memory, &release, true)
+	advance_viewport_camera(&memory.camera, 1)
 	return
 }
 
@@ -161,9 +163,11 @@ test_grid_plane_for_view :: proc(test: ^testing.T) {
 	snap_viewport_camera(&camera, {0, 1, 0})
 	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // Top
 	snap_viewport_camera(&camera, {1, 1, 1})
-	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // isometric: the ground wins the tie
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // isometric: the ground, seen at 35°
 	snap_viewport_camera(&camera, {1, 0.3, 0.2})
 	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.YZ) // mostly from the side
+	snap_viewport_camera(&camera, {0.52, 0.42, 0.74}) // the default angle, 25° above the ground
+	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // ground: still readable
 }
 
 @(test)
@@ -223,5 +227,89 @@ test_view_gizmo_drag_orbits :: proc(test: ^testing.T) {
 	update_view_gizmo(memory, &wobble, true)
 	release_on_knob := mouse_frame(knob + {2, 1}, {}, false, false)
 	update_view_gizmo(memory, &release_on_knob, true)
+	advance_viewport_camera(&memory.camera, 1)
 	testing.expect(test, directions_match(viewport_camera_eye_direction(memory.camera), {1, 0, 0}), "a wobbly click still snaps")
+}
+
+@(test)
+test_view_snap_animates :: proc(test: ^testing.T) {
+	memory := make_view_test_memory()
+	defer free(memory)
+	start := memory.camera
+	knob := compute_view_gizmo_layout(memory).knob_centers[0] // +X
+	press_at(memory, knob)
+	release := mouse_frame(knob, {}, false, false)
+	update_view_gizmo(memory, &release, true)
+	testing.expect(test, memory.camera.yaw == start.yaw && memory.camera.pitch == start.pitch, "the click starts a move; nothing jumps")
+
+	// Part-way: between the start and the Right view, eased (more than half done at half time).
+	advance_viewport_camera(&memory.camera, CAMERA_MOVE_SECONDS * 0.5)
+	right_yaw := f32(math.PI / 2)
+	fraction := (memory.camera.yaw - start.yaw) / (right_yaw - start.yaw)
+	testing.expect(test, fraction > 0.5 && fraction < 1, "half time: past half way (ease out), not there yet")
+	testing.expect(test, memory.camera.pivot == start.pivot && abs(memory.camera.distance - start.distance) < 1e-5, "a view snap only turns")
+
+	advance_viewport_camera(&memory.camera, CAMERA_MOVE_SECONDS)
+	testing.expect(test, directions_match(viewport_camera_eye_direction(memory.camera), {1, 0, 0}), "ends exactly in the Right view")
+	testing.expect_value(test, memory.camera.transition_remaining, f32(0))
+
+	// The short way round: from 170° to -170° is a 20° turn.
+	memory.camera.yaw = math.to_radians(f32(170))
+	target := viewport_camera_target_pose(memory.camera)
+	target.yaw = math.to_radians(f32(-170))
+	move_viewport_camera(&memory.camera, target)
+	testing.expect(test, abs(memory.camera.transition_to.yaw - math.to_radians(f32(190))) < 1e-4, "yaw turns 20°, not 340°")
+
+	// Orbiting takes over from a move, as in Unity.
+	orbit_viewport_camera(&memory.camera, {10, 0})
+	testing.expect_value(test, memory.camera.transition_remaining, f32(0))
+}
+
+@(test)
+test_projection_switch_animates :: proc(test: ^testing.T) {
+	memory := make_view_test_memory()
+	defer free(memory)
+	camera := &memory.camera
+	pixel_at_pivot := viewport_camera_world_per_pixel(camera^, camera.pivot, 800)
+
+	switch_viewport_projection(camera)
+	testing.expect(test, camera.orthographic, "the setting changes at once")
+	for _ in 1 ..= 9 {
+		advance_viewport_camera(camera, PROJECTION_SWITCH_SECONDS * 0.1)
+		lens := viewport_camera_lens(camera^)
+		testing.expect(test, !lens.orthographic, "mid-switch the view is a narrowing perspective")
+		testing.expect(test, lens.eye_distance > camera.distance, "the eye backs away as the field of view narrows")
+		// The dolly zoom: the pivot's surroundings keep their size on screen throughout.
+		testing.expect(test, abs(viewport_camera_world_per_pixel(camera^, camera.pivot, 800) - pixel_at_pivot) < 1e-5 * pixel_at_pivot, "constant size at the pivot")
+	}
+	advance_viewport_camera(camera, PROJECTION_SWITCH_SECONDS)
+	testing.expect(test, viewport_camera_lens(camera^).orthographic, "orthographic at the end")
+	testing.expect(test, abs(viewport_camera_world_per_pixel(camera^, camera.pivot, 800) - pixel_at_pivot) < 1e-5 * pixel_at_pivot, "orthographic has the same size")
+
+	// Switching back mid-way reverses from where it is, without a jump.
+	switch_viewport_projection(camera)
+	advance_viewport_camera(camera, PROJECTION_SWITCH_SECONDS * 0.3)
+	before := viewport_camera_lens(camera^).tan_half_fov
+	switch_viewport_projection(camera) // back to orthographic, from 30% of the way to perspective
+	testing.expect(test, abs(viewport_camera_lens(camera^).tan_half_fov - before) < 1e-6, "reversing doesn't jump")
+}
+
+// F, then orbit: the framed object stays in the middle of the view, because orbiting turns
+// around the pivot and F puts the pivot on the selection.
+@(test)
+test_orbit_after_frame_keeps_object_centred :: proc(test: ^testing.T) {
+	memory := make_view_test_memory()
+	defer free(memory)
+	_, entity := create_entity(&memory.scene, "Cube")
+	entity.position = {3, 1, -2}
+	entity.flags += {.Selected}
+	frame_selection(memory)
+	advance_viewport_camera(&memory.camera, 1)
+	testing.expect(test, linalg.length(memory.camera.pivot - entity.position) < 1e-4, "F puts the pivot on the object")
+	view_center := (memory.viewport_min + memory.viewport_max) * 0.5
+	for _ in 0 ..< 4 {
+		orbit_viewport_camera(&memory.camera, {120, -35})
+		pixel, _ := project_to_pixel(viewport_view_projection(memory), memory.viewport_min, memory.viewport_max, entity.position)
+		testing.expect(test, linalg.length(pixel - view_center) < 0.01, "the object stays centred while orbiting")
+	}
 }

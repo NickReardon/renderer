@@ -29,16 +29,66 @@ Viewport_Camera :: struct {
 	pitch:        f32, // radians above the horizontal plane; ±90° looks straight down / up
 	distance:     f32, // from pivot to eye
 	vertical_fov: f32, // radians (perspective; orthographic derives its size from it)
-	orthographic: bool,
+	orthographic: bool, // the projection chosen; see projection_transition for the one on screen
+
+	// Animated moves (view gizmo snaps, F). Zero means "not animating", so setting the fields
+	// above directly is always an instant change.
+	transition_remaining:  f32, // 1 when a move starts, 0 when it's done
+	transition_from:       Camera_Pose,
+	transition_to:         Camera_Pose,
+	projection_transition: f32, // 1 when the projection was just switched, 0 when it's done
+}
+
+// The part of the camera a move animates.
+Camera_Pose :: struct {
+	pivot:    [3]f32,
+	yaw:      f32,
+	pitch:    f32,
+	distance: f32,
 }
 
 CAMERA_NEAR :: 0.05
 // Orthographic depth range, in front of and behind the eye. The near plane is behind the eye
 // so nothing between the eye and the pivot is clipped when zooming in.
 ORTHOGRAPHIC_DEPTH :: 1000
+CAMERA_MOVE_SECONDS :: 0.3        // a view snap or F; about Unity's
+PROJECTION_SWITCH_SECONDS :: 0.3
+// The narrowest field of view the perspective <-> orthographic animation reaches before it
+// switches to the true orthographic projection. At 1° perspective is indistinguishable from it.
+NARROWEST_FOV_RADIANS :: 1 * math.PI / 180
+
+// How the camera projects this frame. Mid-way through a projection switch it's a perspective
+// camera with a narrower field of view, backed away so the pivot's surroundings keep their
+// size (a "dolly zoom"; Unity animates its orthographic switch the same way): tan(fov / 2)
+// goes from the real field of view's toward NARROWEST_FOV_RADIANS', and the eye's distance is
+// whatever keeps the view's height at the pivot, half_height / tan(fov / 2).
+Camera_Lens :: struct {
+	orthographic:  bool,
+	tan_half_fov:  f32, // perspective only
+	eye_distance:  f32, // from the pivot; equals `distance` except mid-switch
+}
+
+viewport_camera_lens :: proc(camera: Viewport_Camera) -> Camera_Lens {
+	if camera.projection_transition <= 0 {
+		return {orthographic = camera.orthographic, tan_half_fov = math.tan(camera.vertical_fov * 0.5), eye_distance = camera.distance}
+	}
+	// How orthographic the view is: 0 = the real perspective, 1 = orthographic. Smoothstep is
+	// symmetric (s(1 - t) = 1 - s(t)), so switching back mid-way (switch_viewport_projection
+	// flips the remaining time) continues from the same point instead of jumping.
+	progress := math.smoothstep(f32(0), f32(1), 1 - camera.projection_transition)
+	orthographic_amount := progress if camera.orthographic else 1 - progress
+	tan_half_fov := math.lerp(math.tan(camera.vertical_fov * 0.5), math.tan(f32(NARROWEST_FOV_RADIANS) * 0.5), orthographic_amount)
+	return {orthographic = false, tan_half_fov = tan_half_fov, eye_distance = viewport_camera_half_height(camera) / tan_half_fov}
+}
+
+// Fast at first, settling gently: 1 - (1 - t)³.
+ease_out :: proc(t: f32) -> f32 {
+	remaining := 1 - clamp(t, 0, 1)
+	return 1 - remaining * remaining * remaining
+}
 
 viewport_camera_eye :: proc(camera: Viewport_Camera) -> [3]f32 {
-	return camera.pivot + camera.distance * viewport_camera_eye_direction(camera)
+	return camera.pivot + viewport_camera_lens(camera).eye_distance * viewport_camera_eye_direction(camera)
 }
 
 // Unit vector from the pivot toward the eye.
@@ -69,39 +119,42 @@ viewport_camera_view :: proc(camera: Viewport_Camera) -> matrix[4, 4]f32 {
 
 viewport_camera_projection :: proc(camera: Viewport_Camera, aspect_ratio: f32) -> matrix[4, 4]f32 {
 	safe_aspect_ratio := max(aspect_ratio, 0.01)
-	if camera.orthographic {
+	lens := viewport_camera_lens(camera)
+	if lens.orthographic {
 		return core.orthographic_reverse_z(viewport_camera_half_height(camera), safe_aspect_ratio, -ORTHOGRAPHIC_DEPTH, ORTHOGRAPHIC_DEPTH)
 	}
-	return core.perspective_reverse_z(camera.vertical_fov, safe_aspect_ratio, CAMERA_NEAR)
+	return core.perspective_reverse_z(2 * math.atan(lens.tan_half_fov), safe_aspect_ratio, CAMERA_NEAR)
 }
 
 // The ray through a point of the view; `normalized_position` is -1..1 with y up.
 viewport_camera_ray :: proc(camera: Viewport_Camera, aspect_ratio: f32, normalized_position: [2]f32) -> core.Ray {
 	_, _, up := viewport_camera_basis(camera)
 	eye := viewport_camera_eye(camera)
-	if camera.orthographic {
+	lens := viewport_camera_lens(camera)
+	if lens.orthographic {
 		// Start at the near plane, behind the eye, so everything drawn can be picked.
 		start := eye + viewport_camera_eye_direction(camera) * ORTHOGRAPHIC_DEPTH
 		return core.ray_from_viewport_orthographic(start, camera.pivot, up, viewport_camera_half_height(camera), aspect_ratio, normalized_position)
 	}
-	return core.ray_from_viewport(eye, camera.pivot, up, camera.vertical_fov, aspect_ratio, normalized_position)
+	return core.ray_from_viewport(eye, camera.pivot, up, 2 * math.atan(lens.tan_half_fov), aspect_ratio, normalized_position)
 }
 
 // World size of one pixel at `point`, for drawing things at a constant size on screen.
 // Perspective: grows with the point's depth. Orthographic: the same everywhere.
 viewport_camera_world_per_pixel :: proc(camera: Viewport_Camera, point: [3]f32, viewport_height: f32) -> f32 {
-	if camera.orthographic {
+	lens := viewport_camera_lens(camera)
+	if lens.orthographic {
 		return 2 * viewport_camera_half_height(camera) / max(viewport_height, 1)
 	}
 	eye := viewport_camera_eye(camera)
 	depth := linalg.dot(point - eye, -viewport_camera_eye_direction(camera))
-	return 2 * depth * math.tan(camera.vertical_fov * 0.5) / max(viewport_height, 1)
+	return 2 * depth * lens.tan_half_fov / max(viewport_height, 1)
 }
 
 // Unit vector from `point` toward the viewer. In orthographic mode every point sees the camera
 // along the same direction.
 viewport_camera_toward_viewer :: proc(camera: Viewport_Camera, point: [3]f32) -> [3]f32 {
-	if camera.orthographic {
+	if viewport_camera_lens(camera).orthographic {
 		return viewport_camera_eye_direction(camera)
 	}
 	return linalg.normalize(viewport_camera_eye(camera) - point)
@@ -117,11 +170,78 @@ snap_viewport_camera :: proc(camera: ^Viewport_Camera, direction: [3]f32) {
 	camera.yaw = math.atan2(unit.x, unit.z) if horizontal_length > 1e-6 else 0
 }
 
+// The pose an animated move is heading to, or the current pose when nothing is moving. A new
+// move starts from there, so pressing F during a view snap still ends in the snapped view.
+viewport_camera_target_pose :: proc(camera: Viewport_Camera) -> Camera_Pose {
+	if camera.transition_remaining > 0 {
+		return camera.transition_to
+	}
+	return {pivot = camera.pivot, yaw = camera.yaw, pitch = camera.pitch, distance = camera.distance}
+}
+
+// Starts an animated move from where the camera is now to `target` (Unity animates view snaps
+// and F the same way). Yaw takes the short way round: from 170° to -170° turns 20°, not 340°.
+move_viewport_camera :: proc(camera: ^Viewport_Camera, target: Camera_Pose) {
+	camera.transition_from = {pivot = camera.pivot, yaw = camera.yaw, pitch = camera.pitch, distance = camera.distance}
+	camera.transition_to = target
+	yaw_change := math.mod(target.yaw - camera.yaw + math.PI, 2 * math.PI)
+	if yaw_change < 0 {
+		yaw_change += 2 * math.PI
+	}
+	camera.transition_to.yaw = camera.yaw + yaw_change - math.PI
+	camera.transition_remaining = 1
+}
+
+// Animated snap_viewport_camera: turns to look from `direction`, keeping the target pivot and
+// distance.
+turn_viewport_camera :: proc(camera: ^Viewport_Camera, direction: [3]f32) {
+	target := viewport_camera_target_pose(camera^)
+	turned := camera^
+	snap_viewport_camera(&turned, direction)
+	target.yaw, target.pitch = turned.yaw, turned.pitch
+	move_viewport_camera(camera, target)
+}
+
+// Switches perspective / orthographic with the dolly-zoom animation (viewport_camera_lens).
+// Switching back mid-way reverses from where it is, without a jump.
+switch_viewport_projection :: proc(camera: ^Viewport_Camera) {
+	camera.orthographic = !camera.orthographic
+	camera.projection_transition = 1 - camera.projection_transition
+}
+
+// Moves the animations forward by one frame.
+advance_viewport_camera :: proc(camera: ^Viewport_Camera, delta_seconds: f32) {
+	if camera.transition_remaining > 0 {
+		camera.transition_remaining = max(camera.transition_remaining - delta_seconds / CAMERA_MOVE_SECONDS, 0)
+		progress := ease_out(1 - camera.transition_remaining)
+		from, to := camera.transition_from, camera.transition_to
+		camera.pivot = linalg.lerp(from.pivot, to.pivot, progress)
+		camera.yaw = math.lerp(from.yaw, to.yaw, progress)
+		camera.pitch = math.lerp(from.pitch, to.pitch, progress)
+		// Distance changes by a factor, so it's interpolated in log space: a zoom from 1 to 100
+		// spends as long between 1 and 10 as between 10 and 100, which looks even.
+		camera.distance = math.exp(math.lerp(math.ln(from.distance), math.ln(to.distance), progress))
+		if camera.transition_remaining == 0 { // land exactly, without rounding from exp and ln
+			camera.pivot, camera.yaw, camera.pitch, camera.distance = to.pivot, to.yaw, to.pitch, to.distance
+		}
+	}
+	if camera.projection_transition > 0 {
+		camera.projection_transition = max(camera.projection_transition - delta_seconds / PROJECTION_SWITCH_SECONDS, 0)
+	}
+}
+
+// The user took over (orbit, pan, zoom, fly): stop the move where it is, as Unity does. The
+// projection switch keeps going; it doesn't fight any control.
+stop_viewport_camera_move :: proc(camera: ^Viewport_Camera) {
+	camera.transition_remaining = 0
+}
+
 // Turns the camera around its pivot by a mouse movement (Alt + left drag, or dragging the view
 // gizmo): right turns the world right, down tilts it toward you. The poles are allowed
 // (viewport_camera_basis doesn't degenerate there), but not beyond: past them the view would
 // turn upside down.
 orbit_viewport_camera :: proc(camera: ^Viewport_Camera, mouse_delta: [2]f32) {
+	stop_viewport_camera_move(camera)
 	camera.yaw -= mouse_delta.x * ORBIT_RADIANS_PER_PIXEL
 	camera.pitch = clamp(camera.pitch + mouse_delta.y * ORBIT_RADIANS_PER_PIXEL, -math.PI / 2, math.PI / 2)
 }
@@ -143,6 +263,11 @@ update_viewport_camera :: proc(camera: ^Viewport_Camera, input: ^platform.Input)
 	flying := !alt_held && input.mouse[.Right].down
 	panning := input.mouse[.Middle].down
 
+	advance_viewport_camera(camera, input.delta_seconds)
+	if panning || dollying || flying || input.wheel != 0 {
+		stop_viewport_camera_move(camera)
+	}
+
 	if orbiting {
 		orbit_viewport_camera(camera, mouse_delta)
 	}
@@ -150,7 +275,7 @@ update_viewport_camera :: proc(camera: ^Viewport_Camera, input: ^platform.Input)
 	if flying {
 		// Turn the view around the eye instead of the pivot: keep the eye where it is and move
 		// the pivot so it stays `distance` in front of the new view direction.
-		eye := viewport_camera_eye(camera^)
+		eye := camera.pivot + camera.distance * viewport_camera_eye_direction(camera^) // not mid-switch
 		orbit_viewport_camera(camera, mouse_delta) // the same turn, then moved to keep the eye
 		camera.pivot = eye - camera.distance * viewport_camera_eye_direction(camera^)
 

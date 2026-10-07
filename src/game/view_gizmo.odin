@@ -168,9 +168,9 @@ update_view_gizmo :: proc(memory: ^Game_Memory, input: ^platform.Input, viewport
 				switch editor.view_gizmo_pressed {
 				case .Direction:
 					directions := VIEW_GIZMO_DIRECTIONS
-					snap_viewport_camera(&memory.camera, directions[editor.view_gizmo_pressed_direction])
+					turn_viewport_camera(&memory.camera, directions[editor.view_gizmo_pressed_direction])
 				case .Projection:
-					memory.camera.orthographic = !memory.camera.orthographic
+					switch_viewport_projection(&memory.camera)
 				case .Background, .None:
 				}
 			}
@@ -302,17 +302,17 @@ draw_view_gizmo :: proc(memory: ^Game_Memory, renderer: ^render.Renderer) {
 	ui.overlay_text(user_interface, renderer, (layout.label_min + layout.label_max) * 0.5, label, {0.86, 0.86, 0.88, 1}, .Regular, 11)
 }
 
-// The plane the grid lies in. Perspective always uses the ground. Orthographic uses the world
-// plane the view looks at most directly, so the side views (where the ground is edge-on and
-// invisible) get a grid of their own: XY for Front and Back, YZ for Right and Left. The ground
-// wins ties, so the isometric corner views keep it.
+// The plane the grid lies in. Perspective always uses the ground. Orthographic keeps the ground
+// too unless it's seen nearly edge-on (less than 20° from the side): there, as in the side
+// views, it would be a thin smear or invisible, so the grid moves to the vertical plane the view
+// faces most: XY for Front and Back, YZ for Right and Left.
 grid_plane_for_view :: proc(camera: Viewport_Camera) -> render.Grid_Plane {
-	TIE_MARGIN :: 0.01
-	if !camera.orthographic {
+	GROUND_MIN_SINE :: 0.342 // sin(20°)
+	if !viewport_camera_lens(camera).orthographic { // what's on screen, so not mid-switch
 		return .XZ
 	}
 	toward_viewer := linalg.abs(viewport_camera_eye_direction(camera))
-	if toward_viewer.y >= max(toward_viewer.x, toward_viewer.z) - TIE_MARGIN {
+	if toward_viewer.y >= GROUND_MIN_SINE {
 		return .XZ
 	}
 	return .XY if toward_viewer.z >= toward_viewer.x else .YZ

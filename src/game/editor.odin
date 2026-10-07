@@ -326,20 +326,23 @@ selection_world_bounds :: proc(scene: ^Scene) -> (bounds_min, bounds_max: [3]f32
 
 // Moves the camera pivot to the selection's centre and backs off until it fits the view.
 // With nothing selected, frames the origin.
+// Animated, as in Unity. Orbiting afterwards turns around the framed object, because orbiting
+// always turns around the pivot.
 frame_selection :: proc(memory: ^Game_Memory) {
+	target := viewport_camera_target_pose(memory.camera) // keeps a view snap that's under way
 	bounds_min, bounds_max, any_selected := selection_world_bounds(&memory.scene)
 	if !any_selected {
-		memory.camera.pivot = {0, 0, 0}
-		memory.camera.distance = 7
+		target.pivot, target.distance = {0, 0, 0}, 7
+		move_viewport_camera(&memory.camera, target)
 		return
 	}
-	center := (bounds_min + bounds_max) * 0.5
 	radius := max(linalg.length(bounds_max - bounds_min) * 0.5, 0.1)
-	memory.camera.pivot = center
+	target.pivot = (bounds_min + bounds_max) * 0.5
 	// Back off until the bounding sphere fits both the vertical and horizontal field of view.
 	viewport_size := memory.viewport_max - memory.viewport_min
 	aspect_ratio := viewport_size.x / max(viewport_size.y, 1) if viewport_size.x > 0 else 1
-	memory.camera.distance = core.distance_to_fit_sphere(radius, memory.camera.vertical_fov, aspect_ratio) * 1.1
+	target.distance = core.distance_to_fit_sphere(radius, memory.camera.vertical_fov, aspect_ratio) * 1.1
+	move_viewport_camera(&memory.camera, target)
 }
 
 // Draws the selected objects' edges in orange, pulled very slightly toward the camera so they

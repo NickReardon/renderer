@@ -31,6 +31,8 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --ortho                 start in orthographic projection
   --view=top              start in an axis view (right, left, top, bottom, front, back), or
                           --view=corner for the +X +Y +Z corner (isometric with --ortho)
+  --switch-projection     start the animated switch to orthographic (capture it with
+                          --screenshot-frame=N)
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't

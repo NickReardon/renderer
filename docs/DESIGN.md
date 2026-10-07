@@ -635,7 +635,7 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   clickable. Corner views in orthographic mode are true isometric (pitch atan(1/√2)).
 - **Snapping keeps the pivot and distance,** so what you were looking at stays centred. Top
   and Bottom use yaw 0: in Top, +X is right and the scene's back (-Z) is up, as in Unity.
-  Snaps are instant; Unity animates them (a later polish).
+  Snaps are animated (below).
 - **Dragging the view gizmo orbits** (as Blender's navigation gizmo does; Unity's doesn't). A
   press on any part, or on the empty disc around the knobs, becomes a drag once the mouse moves
   past the selection-click tolerance, and the turn is exactly Alt + left drag's
@@ -661,10 +661,29 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
 - **Selection outlines move along the view direction** in orthographic mode. They used to move
   toward the eye point, which in orthographic would also slide them sideways on screen.
 - **The grid faces orthographic side views.** The ground is edge-on (invisible) from the side,
-  so in orthographic the grid moves to the world plane the view looks at most directly: XY for
-  Front and Back, YZ for Right and Left (Unity does the same). The ground wins ties, so
-  isometric views keep it, and perspective always uses the ground, where its horizon helps.
+  so in orthographic, when the ground is seen at less than 20°, the grid moves to the vertical
+  plane the view faces most: XY for Front and Back, YZ for Right and Left (Unity does this in
+  its side views). Steeper views, isometric included, keep the ground; a first version used
+  "the plane faced most" everywhere and put a vertical grid in the default 25° view.
+  Perspective always uses the ground, where its horizon helps.
   The renderer only takes a `Grid_Plane` in `Frame_Settings`; the shader works in 2D plane
   coordinates and swaps the plane's two world axes and their colours. The choice is the
   editor's, with a checkbox to keep the ground grid.
 - **Not done:** no keyboard shortcuts for the views (Unity has none; Blender uses the numpad).
+- **Animated view changes, as in Unity.** View gizmo snaps and F move the camera over 0.3 s
+  with an ease-out (fast start, so it feels responsive). A move is a start and a target pose
+  (pivot, yaw, pitch, distance) and the time left; zero time left means "not moving", so
+  setting the camera directly (flags, tests, the Inspector) stays instant. Yaw goes the short
+  way round; distance is interpolated in log space so big zooms look even. A new move starts
+  from the current target, so F during a snap still ends in the snapped view. Orbit, pan,
+  zoom or fly stop a move where it is.
+- **Perspective ↔ orthographic is a dolly zoom,** as Unity animates it: the field of view
+  narrows toward 1° while the eye backs away so the view's height at the pivot stays the same
+  (eye distance = half height / tan(fov / 2)), then the true orthographic projection takes
+  over (indistinguishable at 1°). `viewport_camera_lens` is the one place that says how the
+  camera projects this frame; view, projection, rays and pixel size all ask it. The switch
+  uses smoothstep, not ease-out: switching back mid-way flips the time left, and only a
+  symmetric curve (s(1 - t) = 1 - s(t)) continues from the same point without a jump.
+- **Orbit always turns around the pivot,** and F puts the pivot on the selection, so after F,
+  Alt + left drag (or dragging the view gizmo) orbits the framed object. Panning and flying
+  move the pivot with the view, as in Unity.
