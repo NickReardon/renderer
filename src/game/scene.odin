@@ -15,6 +15,7 @@ package game
 import "core:fmt"
 import "core:math/linalg"
 import "core:strings"
+import "core:unicode"
 import "engine:core"
 import "engine:render"
 
@@ -204,24 +205,109 @@ entity_world_matrix :: proc(entity: ^Entity) -> matrix[4, 4]f32 {
 // "Cube (3) (1)". Every candidate is built to fit the 48-byte name buffer (the base is shortened
 // to leave room for the suffix), so uniqueness is checked on the name exactly as it will be
 // stored.
-unique_entity_name :: proc(scene: ^Scene, requested_name: string) -> string {
-	name_in_use :: proc(scene: ^Scene, name: string) -> bool {
-		for slot_index in 1 ..= scene.highest_entity_slot {
-			entity := &scene.entities[slot_index]
-			if .Alive in entity.flags && entity_name(entity) == name {
-				return true
-			}
-		}
-		return false
-	}
+//
+// One pass over the scene marks which numbers are taken (0 is the name without a suffix), then
+// the smallest free one is used. Testing each candidate against the whole scene in turn would
+// cost a scan per candidate: with a thousand "Cube (N)" objects, about a million name
+// comparisons, every frame while the rename box checks a taken name (found in review of #24).
+unique_entity_name :: proc(scene: ^Scene, requested_name: string, excluding: Entity_Handle = {}) -> string {
 	base_name := strip_number_suffix(requested_name)
-	for number := 0; ; number += 1 {
-		suffix := fmt.tprintf(" (%d)", number) if number > 0 else ""
-		candidate := fmt.tprintf("%s%s", truncate_utf8(base_name, ENTITY_NAME_BYTES - len(suffix)), suffix)
-		if !name_in_use(scene, candidate) {
-			return candidate
+	// Fewer than MAX_ENTITIES other entities can take fewer than MAX_ENTITIES numbers, so one
+	// below MAX_ENTITIES is always free.
+	taken: [MAX_ENTITIES]bool
+	unsuffixed := truncate_utf8(base_name, ENTITY_NAME_BYTES)
+	for slot_index in 1 ..= scene.highest_entity_slot {
+		entity := &scene.entities[slot_index]
+		if !(.Alive in entity.flags) || slot_index == int(excluding.index) {
+			continue
+		}
+		name := entity_name(entity)
+		if name == unsuffixed {
+			taken[0] = true
+			continue
+		}
+		// Is this name candidate N? Only if it's written exactly as a candidate would be: digits
+		// without a leading zero ("Cube (01)" isn't "Cube (1)"), after the base shortened for
+		// that suffix's length.
+		name_base := strip_number_suffix(name)
+		if name_base == name {
+			continue
+		}
+		digits := name[len(name_base) + 2:len(name) - 1] // between " (" and ")"
+		if len(digits) > 4 || digits[0] == '0' { // MAX_ENTITIES has 4 digits
+			continue
+		}
+		number := 0
+		for digit in digits {
+			number = number * 10 + int(digit - '0')
+		}
+		suffix_length := len(digits) + 3 // " (" and ")"
+		if number < MAX_ENTITIES && name_base == truncate_utf8(base_name, ENTITY_NAME_BYTES - suffix_length) {
+			taken[number] = true
 		}
 	}
+	for number in 0 ..< MAX_ENTITIES {
+		if !taken[number] {
+			suffix := fmt.tprintf(" (%d)", number) if number > 0 else ""
+			return fmt.tprintf("%s%s", truncate_utf8(base_name, ENTITY_NAME_BYTES - len(suffix)), suffix)
+		}
+	}
+	unreachable()
+}
+
+// Names: letters (any script), digits, spaces and _ - . ( ). Kept to these so a name can later
+// be part of a file name or a reference typed by hand, on any system.
+NAME_PUNCTUATION :: "_-.()"
+
+name_character_allowed :: proc(character: rune) -> bool {
+	return unicode.is_letter(character) || unicode.is_digit(character) || character == ' ' || strings.contains_rune(NAME_PUNCTUATION, character)
+}
+
+// Combining marks are part of written letters: the vowel sign in Hindi "किरण" (a spacing mark),
+// or the accent in "Café" typed as "e" plus U+0301 (a nonspacing mark). Unicode's identifier
+// rules (UAX #31) allow these two kinds after the first character, and so do we; a mark at the
+// start has no letter to belong to.
+name_mark_allowed :: proc(character: rune) -> bool {
+	return unicode.is_nonspacing_mark(character) || unicode.is_spacing_mark(character)
+}
+
+// What renaming `entity` to `typed` would do. Spaces at either end are dropped. A name that's
+// empty or has a character outside name_character_allowed (and name_mark_allowed after the
+// first) can't be used: `blocked`, with
+// `message` saying why. A name another entity already has gets the next free " (N)", as Create
+// and Ctrl+D do: `final_name` is that name, and `message` says so (not blocking). The entity's
+// own current name is never "taken". `final_name` and `message` use the temp allocator.
+check_entity_name :: proc(scene: ^Scene, entity: Entity_Handle, typed: string) -> (final_name: string, message: string, blocked: bool) {
+	trimmed := strings.trim_space(typed)
+	if trimmed == "" {
+		return "", "A name can't be empty.", true
+	}
+	for character, byte_index in trimmed {
+		if name_character_allowed(character) || (byte_index > 0 && name_mark_allowed(character)) {
+			continue
+		}
+		if name_mark_allowed(character) {
+			return "", "A name can't start with a combining mark.", true
+		}
+		return "", fmt.tprintf("Names can't contain \"%c\". Use letters, digits, spaces and _ - . ( )", character), true
+	}
+	final_name = truncate_utf8(trimmed, ENTITY_NAME_BYTES)
+	if entity_name_in_use(scene, final_name, entity) {
+		final_name = unique_entity_name(scene, final_name, entity)
+		message = fmt.tprintf("Taken: will be named \"%s\".", final_name)
+	}
+	return
+}
+
+// Whether an entity other than `excluding` has this name.
+entity_name_in_use :: proc(scene: ^Scene, name: string, excluding: Entity_Handle = {}) -> bool {
+	for slot_index in 1 ..= scene.highest_entity_slot {
+		entity := &scene.entities[slot_index]
+		if .Alive in entity.flags && slot_index != int(excluding.index) && entity_name(entity) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // "Cube (12)" -> "Cube"; anything else is returned unchanged.

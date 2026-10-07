@@ -41,6 +41,10 @@ DARK_THEME :: Theme{
 	text_selection   = {52, 104, 170, 255},
 }
 
+// Text and borders for a value that can't be used (a text box's check). A constant rather than a
+// Theme field so adding it didn't change Ui_State's layout (a hot reload, not a restart).
+TEXT_ERROR_COLOR :: clay.Color{235, 87, 87, 255}
+
 FONT_SIZE          :: 13
 TITLE_FONT_SIZE    :: 15
 ROW_HEIGHT         :: 24

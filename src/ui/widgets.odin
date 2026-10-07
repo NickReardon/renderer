@@ -437,6 +437,20 @@ Text_Box_Result :: enum u8 {
 	Cancelled, // typing finished with Escape; keep the old text
 }
 
+// What a text box's check procedure says about the text being typed: a message to show under the
+// box (empty for none), and whether the text can't be applied. A blocking message is shown in
+// red and keeps Enter and Tab from applying; a click elsewhere then cancels instead.
+Text_Check :: struct {
+	message: string, // must live until end_frame (the temp allocator is fine)
+	blocks:  bool,
+}
+
+// Checks typed text for a text box. A procedure parameter rather than something the box keeps:
+// it's called during the text_box call that receives it (every frame while typing, so the
+// message follows the typing, and again before applying), and never stored. `data` is the
+// caller's, passed through.
+Text_Check_Procedure :: #type proc(text: string, data: rawptr) -> Text_Check
+
 // A one-line text box (an object's name). It shows `current_text`; a click starts typing with
 // all of it selected, as does `start_editing` (for a shortcut such as F2). Enter, Tab or a click
 // elsewhere apply the typing, Escape cancels it. The box doesn't store anything: on .Applied,
@@ -449,10 +463,13 @@ text_box :: proc(
 	maximum_bytes: int = MAX_EDIT_BYTES,
 	font: Font = .Regular,
 	start_editing := false,
+	check: Text_Check_Procedure = nil,
+	check_data: rawptr = nil,
 ) -> (edited: string, result: Text_Box_Result) {
 	box_id := clay.ID_LOCAL(id_text)
 	interaction := interact(state, box_id)
 	editing := state.edit_id == box_id.id
+	current_check: Text_Check
 	if interaction.hovered {
 		state.cursor = .Text
 	}
@@ -465,9 +482,18 @@ text_box :: proc(
 	} else {
 		edit_with_mouse(state, interaction)
 		commit, cancel := edit_text(state, numbers_only = false)
+		if check != nil {
+			current_check = check(edited_text(state), check_data)
+		}
 		clicked_elsewhere := state.input.mouse[.Left].pressed && !clay.PointerOver(box_id)
 		tab := state.input.keys[.Tab].pressed || state.input.keys[.Tab].repeated
-		if commit || tab || clicked_elsewhere {
+		if current_check.blocks && clicked_elsewhere {
+			result = .Cancelled // the box can't stay open while you work elsewhere: keep the old text
+			finish_text_edit(state)
+			editing = false
+		} else if current_check.blocks && (commit || tab) {
+			// Not applied: typing goes on, and the message says why.
+		} else if commit || tab || clicked_elsewhere {
 			edited = clone_for_frame(edited_text(state))
 			result = .Applied
 			state.typed_value_applied = true
@@ -489,6 +515,10 @@ text_box :: proc(
 	} else if interaction.hovered || interaction.held {
 		background = state.theme.field_hover
 	}
+	border_color := state.theme.panel_border
+	if editing {
+		border_color = TEXT_ERROR_COLOR if current_check.blocks else state.theme.accent
+	}
 	clay._OpenElementWithId(box_id)
 	clay.ConfigureOpenElement({
 		layout = {
@@ -498,7 +528,7 @@ text_box :: proc(
 		},
 		backgroundColor = background,
 		cornerRadius    = clay.CornerRadiusAll(points(state, CORNER_RADIUS)),
-		border          = {color = state.theme.accent if editing else state.theme.panel_border, width = clay.BorderOutside(points_u16(state, 1))},
+		border          = {color = border_color, width = clay.BorderOutside(points_u16(state, 1))},
 		clip            = {horizontal = true},
 	})
 	if editing {
@@ -509,6 +539,10 @@ text_box :: proc(
 		text(state, clone_for_frame(current_text), font)
 	}
 	clay._CloseElement()
+	// The check's message, under the box while typing: red when it blocks, dim when it's a note.
+	if editing && current_check.message != "" {
+		text(state, clone_for_frame(current_check.message), .Regular, FONT_SIZE - 1, TEXT_ERROR_COLOR if current_check.blocks else state.theme.text_dim, .Words)
+	}
 	return
 }
 
