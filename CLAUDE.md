@@ -6,7 +6,7 @@ also a learning project: the owner wants to understand data-oriented, procedural
 immediate-mode design, so code must be easy to read and every non-obvious decision explained.
 
 Read `docs/STYLE.md` for the full rules and reasoning, `docs/DESIGN.md` for past decisions, and
-`docs/REFERENCES.md` for sources.
+`docs/REFERENCES.md` for sources. Planned work that hasn't started is in `docs/BACKLOG.md`.
 
 ## Build and run (Windows)
 
@@ -163,6 +163,12 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
   learning these techniques. Record real design decisions (choices between alternatives) in
   `docs/DESIGN.md`.
 - **Keep changes to one milestone at a time;** don't build ahead of what was asked.
+- **Ideas outside the current branch's scope go in `docs/BACKLOG.md`,** not into the branch:
+  recommend them, write them down there (what, why, roughly how), and keep the branch to its
+  milestone.
+- **Prefer designs that hot-reload.** Avoid changing `src/host/`, `src/platform/` types, the
+  exported `game_*` procedures or `Game_Memory`'s layout when a game-side design works; when
+  one must change, say which reload level it needs (hot reload, F6 restart, full relaunch).
 - **Cite sources** in comments for non-obvious algorithms (see `docs/REFERENCES.md`).
 - **Entity model: hybrid fat struct** (`docs/STYLE.md` §15):
   - one `Entity` struct in a fixed pool with `Entity_Handle { index, generation }`; slot 0 is
