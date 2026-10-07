@@ -19,11 +19,26 @@ make_view_test_memory :: proc() -> ^Game_Memory {
 }
 
 @(private = "file")
+// A press and, on the next frame, a release at the same pixel. Clicks act on the release.
 click_at :: proc(memory: ^Game_Memory, pixel: [2]f32) -> (owned: bool) {
-	input: platform.Input
-	input.mouse_position = pixel
-	input.mouse[.Left] = {down = true, pressed = true}
-	return update_view_gizmo(memory, &input, true)
+	owned = press_at(memory, pixel)
+	release := mouse_frame(pixel, {}, false, false)
+	update_view_gizmo(memory, &release, true)
+	return
+}
+
+@(private = "file")
+press_at :: proc(memory: ^Game_Memory, pixel: [2]f32) -> (owned: bool) {
+	press := mouse_frame(pixel, {}, true, true)
+	return update_view_gizmo(memory, &press, true)
+}
+
+@(private = "file")
+mouse_frame :: proc(position, delta: [2]f32, pressed, down: bool) -> (input: platform.Input) {
+	input.mouse_position = position
+	input.mouse_delta = delta
+	input.mouse[.Left] = {down = down, pressed = pressed, released = !down}
+	return
 }
 
 @(private = "file")
@@ -149,4 +164,64 @@ test_grid_plane_for_view :: proc(test: ^testing.T) {
 	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.XZ) // isometric: the ground wins the tie
 	snap_viewport_camera(&camera, {1, 0.3, 0.2})
 	testing.expect_value(test, grid_plane_for_view(camera), render.Grid_Plane.YZ) // mostly from the side
+}
+
+@(test)
+test_view_gizmo_drag_orbits :: proc(test: ^testing.T) {
+	memory := make_view_test_memory()
+	defer free(memory)
+	start := default_viewport_camera()
+	layout := compute_view_gizmo_layout(memory)
+
+	// Pressing a knob does nothing yet: it might be the start of a drag.
+	knob := layout.knob_centers[0] // +X
+	testing.expect(test, press_at(memory, knob), "a press on a knob is the gizmo's")
+	testing.expect(test, memory.camera == start, "a press alone doesn't snap")
+
+	// Moving past the click tolerance orbits by the mouse movement, exactly like Alt + left drag.
+	expected := start
+	delta := [2]f32{30, -12}
+	orbit_viewport_camera(&expected, delta)
+	drag := mouse_frame(knob + delta, delta, false, true)
+	testing.expect(test, update_view_gizmo(memory, &drag, true), "the gizmo keeps the mouse while dragging")
+	testing.expect(test, memory.editor.view_gizmo_dragging, "moved past the tolerance: dragging")
+	testing.expect(test, memory.camera == expected, "dragging orbits")
+
+	// The drag keeps going outside the gizmo and over the panels (no viewport mouse).
+	far_away := mouse_frame({20, 700}, delta, false, true)
+	testing.expect(test, update_view_gizmo(memory, &far_away, false), "the drag keeps the mouse anywhere")
+	orbit_viewport_camera(&expected, delta)
+	testing.expect(test, memory.camera == expected, "dragging over panels still orbits")
+
+	// Releasing after a drag doesn't click the knob it started on.
+	release := mouse_frame({20, 700}, {}, false, false)
+	update_view_gizmo(memory, &release, false)
+	testing.expect(test, memory.camera == expected, "no snap after a drag")
+	testing.expect_value(test, memory.editor.view_gizmo_pressed, View_Gizmo_Part.None)
+
+	// The empty disc between the knobs can be dragged too, but clicking it does nothing.
+	layout = compute_view_gizmo_layout(memory)
+	empty: [2]f32
+	found_empty := false
+	for step in 0 ..< 36 {
+		angle := f32(step) * math.PI / 18
+		candidate := layout.center + [2]f32{math.cos(angle), math.sin(angle)} * (layout.background_radius - 2)
+		if part, _ := view_gizmo_part_under_mouse(layout, candidate); part == .Background {
+			empty, found_empty = candidate, true
+			break
+		}
+	}
+	testing.expect(test, found_empty, "the disc's rim has empty space between knobs")
+	before := memory.camera
+	testing.expect(test, click_at(memory, empty), "the empty disc is the gizmo's")
+	testing.expect(test, memory.camera == before, "clicking the empty disc changes nothing")
+
+	// A small wobble within the tolerance is still a click.
+	memory.camera = start
+	testing.expect(test, press_at(memory, knob), "press")
+	wobble := mouse_frame(knob + {2, 1}, {2, 1}, false, true)
+	update_view_gizmo(memory, &wobble, true)
+	release_on_knob := mouse_frame(knob + {2, 1}, {}, false, false)
+	update_view_gizmo(memory, &release_on_knob, true)
+	testing.expect(test, directions_match(viewport_camera_eye_direction(memory.camera), {1, 0, 0}), "a wobbly click still snaps")
 }

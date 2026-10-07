@@ -117,15 +117,22 @@ snap_viewport_camera :: proc(camera: ^Viewport_Camera, direction: [3]f32) {
 	camera.yaw = math.atan2(unit.x, unit.z) if horizontal_length > 1e-6 else 0
 }
 
+// Turns the camera around its pivot by a mouse movement (Alt + left drag, or dragging the view
+// gizmo): right turns the world right, down tilts it toward you. The poles are allowed
+// (viewport_camera_basis doesn't degenerate there), but not beyond: past them the view would
+// turn upside down.
+orbit_viewport_camera :: proc(camera: ^Viewport_Camera, mouse_delta: [2]f32) {
+	camera.yaw -= mouse_delta.x * ORBIT_RADIANS_PER_PIXEL
+	camera.pitch = clamp(camera.pitch + mouse_delta.y * ORBIT_RADIANS_PER_PIXEL, -math.PI / 2, math.PI / 2)
+}
+
+ORBIT_RADIANS_PER_PIXEL :: 0.005
+
 update_viewport_camera :: proc(camera: ^Viewport_Camera, input: ^platform.Input) {
-	RADIANS_PER_PIXEL :: 0.005
 	ZOOM_PER_WHEEL_STEP :: 0.88
 	DOLLY_PER_PIXEL :: 0.01
 	FLY_SPEED_UNITS_PER_SECOND :: 3.0
 	FLY_FAST_MULTIPLIER :: 4.0
-	// The poles are allowed (viewport_camera_basis doesn't degenerate there), but not beyond:
-	// past them the view would turn upside down.
-	MAX_PITCH :: math.PI / 2
 
 	alt_held := input.keys[.Left_Alt].down || input.keys[.Right_Alt].down
 	shift_held := input.keys[.Left_Shift].down || input.keys[.Right_Shift].down
@@ -137,16 +144,14 @@ update_viewport_camera :: proc(camera: ^Viewport_Camera, input: ^platform.Input)
 	panning := input.mouse[.Middle].down
 
 	if orbiting {
-		camera.yaw -= mouse_delta.x * RADIANS_PER_PIXEL
-		camera.pitch = clamp(camera.pitch + mouse_delta.y * RADIANS_PER_PIXEL, -MAX_PITCH, MAX_PITCH)
+		orbit_viewport_camera(camera, mouse_delta)
 	}
 
 	if flying {
 		// Turn the view around the eye instead of the pivot: keep the eye where it is and move
 		// the pivot so it stays `distance` in front of the new view direction.
 		eye := viewport_camera_eye(camera^)
-		camera.yaw -= mouse_delta.x * RADIANS_PER_PIXEL
-		camera.pitch = clamp(camera.pitch + mouse_delta.y * RADIANS_PER_PIXEL, -MAX_PITCH, MAX_PITCH)
+		orbit_viewport_camera(camera, mouse_delta) // the same turn, then moved to keep the eye
 		camera.pivot = eye - camera.distance * viewport_camera_eye_direction(camera^)
 
 		forward, right, _ := viewport_camera_basis(camera^)

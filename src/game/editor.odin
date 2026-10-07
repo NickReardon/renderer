@@ -37,6 +37,10 @@ Editor_State :: struct {
 	active_entity:        Entity_Handle, // selected last; see active_selected_entity
 	view_gizmo_hovered:   View_Gizmo_Part,
 	view_gizmo_hovered_direction: int,
+	view_gizmo_pressed:   View_Gizmo_Part, // the left button went down on this part and is still down
+	view_gizmo_pressed_direction: int,
+	view_gizmo_press_position: [2]f32,
+	view_gizmo_dragging:  bool,          // the press moved: orbiting, and no click on release
 
 	// Developer flag --pick-center-of=<name>: once the viewport is laid out, click the pixel
 	// where that entity's centre appears, through the normal picking path.

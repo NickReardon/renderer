@@ -636,6 +636,12 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
 - **Snapping keeps the pivot and distance,** so what you were looking at stays centred. Top
   and Bottom use yaw 0: in Top, +X is right and the scene's back (-Z) is up, as in Unity.
   Snaps are instant; Unity animates them (a later polish).
+- **Dragging the view gizmo orbits** (as Blender's navigation gizmo does; Unity's doesn't). A
+  press on any part, or on the empty disc around the knobs, becomes a drag once the mouse moves
+  past the selection-click tolerance, and the turn is exactly Alt + left drag's
+  (`orbit_viewport_camera`). So clicks act on release, not press: on press it isn't known yet
+  whether the user is clicking or dragging. A drag keeps the mouse over panels and outside the
+  view, like a gizmo handle drag. The disc lights up on hover to show it's grabbable.
 - **The camera basis comes from yaw and pitch, not `look_at(…, WORLD_UP)`.** Crossing the
   view direction with world up is zero when looking straight down, so the old camera clamped
   pitch to 89.4° and a "top" view was slightly tilted, which shows in orthographic as thin

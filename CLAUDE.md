@@ -66,8 +66,8 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
 - **Editor UX follows Unity's scene view:**
   - navigation: Alt+left orbit, middle pan, Alt+right or wheel zoom, right-drag fly with
     WASD/QE, F to frame;
-  - the view gizmo (top right) snaps to axis and corner views; its centre switches
-    perspective / orthographic;
+  - the view gizmo (top right) snaps to axis and corner views, and dragging it orbits; its
+    centre switches perspective / orthographic;
   - transform gizmos (move, rotate, scale handles) and the QWERTY tool keys when the editor
     gets them;
   - all of it in our right-handed, Y-up space.

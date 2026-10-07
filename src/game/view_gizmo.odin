@@ -7,6 +7,7 @@
 //                                       orthographic mode that is the isometric view
 //   centre square                       switch perspective / orthographic
 //   label underneath                    names the view; clicking it also switches projection
+//   dragging anywhere on it             orbits the camera, like Alt + left drag
 // The centre square is drawn over the knobs, so it stays clickable when a knob faces you
 // (that knob is the view you're in).
 //
@@ -51,6 +52,7 @@ View_Gizmo_Part :: enum u8 {
 	None,
 	Direction,  // a knob; which one is in Editor_State.view_gizmo_hovered_direction
 	Projection, // the centre square or the label
+	Background, // the disc around the knobs: only for dragging
 }
 
 // Where everything is on screen this frame.
@@ -60,6 +62,7 @@ View_Gizmo_Layout :: struct {
 	knob_radii:       [VIEW_GIZMO_DIRECTION_COUNT]f32,
 	knob_depths:      [VIEW_GIZMO_DIRECTION_COUNT]f32, // toward the viewer: 1 in front, -1 behind
 	center_half_size: f32,
+	background_radius: f32, // the disc that can be dragged to orbit
 	label_min:        [2]f32,
 	label_max:        [2]f32,
 	points_to_pixels: f32,
@@ -72,6 +75,7 @@ compute_view_gizmo_layout :: proc(memory: ^Game_Memory) -> (layout: View_Gizmo_L
 	reach := radius + VIEW_GIZMO_AXIS_KNOB_POINTS * scale + VIEW_GIZMO_MARGIN_POINTS * scale
 	layout.center = {memory.viewport_max.x - reach, memory.viewport_min.y + reach}
 	layout.center_half_size = VIEW_GIZMO_CENTER_POINTS * scale
+	layout.background_radius = radius + (VIEW_GIZMO_AXIS_KNOB_POINTS + 4) * scale
 
 	_, right, up := viewport_camera_basis(memory.camera)
 	toward_viewer := viewport_camera_eye_direction(memory.camera)
@@ -129,14 +133,53 @@ view_gizmo_part_under_mouse :: proc(layout: View_Gizmo_Layout, mouse: [2]f32) ->
 			return .Direction, knob_index
 		}
 	}
+	if linalg.length(mouse - layout.center) <= layout.background_radius {
+		return .Background, 0
+	}
 	return .None, 0
 }
 
-// Hover and clicks. Returns true when the gizmo has the mouse (it's over a part), so the click
-// doesn't also select, and the view doesn't pan with the Hand tool.
+// Hover, clicks and dragging. Returns true when the gizmo has the mouse (it's over a part, or a
+// press on it is still held), so the click doesn't also select, and the view doesn't pan with
+// the Hand tool.
+//
+// A press on any part becomes a click or a drag, decided by how far the mouse moves before the
+// release (the same tolerance as selection clicks). Moved: the camera orbits with the mouse,
+// as with Alt + left drag, and nothing is clicked. Not moved: the release clicks the part that
+// was pressed. Clicks therefore act on release, not on press. `input` is unfiltered, so a drag
+// keeps going over the panels and its release is never lost.
 update_view_gizmo :: proc(memory: ^Game_Memory, input: ^platform.Input, viewport_has_mouse: bool) -> (owns_mouse: bool) {
 	editor := &memory.editor
 	editor.view_gizmo_hovered = .None
+	left_mouse := input.mouse[.Left]
+
+	if editor.view_gizmo_pressed != .None {
+		if !editor.view_gizmo_dragging && linalg.length(input.mouse_position - editor.view_gizmo_press_position) > CLICK_MOVE_TOLERANCE_PIXELS {
+			editor.view_gizmo_dragging = true
+		}
+		if editor.view_gizmo_dragging {
+			orbit_viewport_camera(&memory.camera, input.mouse_delta)
+			editor.view_gizmo_hovered = .Background // keep the disc lit while dragging
+		} else {
+			editor.view_gizmo_hovered, editor.view_gizmo_hovered_direction = editor.view_gizmo_pressed, editor.view_gizmo_pressed_direction
+		}
+		if !left_mouse.down {
+			if !editor.view_gizmo_dragging {
+				switch editor.view_gizmo_pressed {
+				case .Direction:
+					directions := VIEW_GIZMO_DIRECTIONS
+					snap_viewport_camera(&memory.camera, directions[editor.view_gizmo_pressed_direction])
+				case .Projection:
+					memory.camera.orthographic = !memory.camera.orthographic
+				case .Background, .None:
+				}
+			}
+			editor.view_gizmo_pressed = .None
+			editor.view_gizmo_dragging = false
+		}
+		return true
+	}
+
 	alt_held := input.keys[.Left_Alt].down || input.keys[.Right_Alt].down
 	if !viewport_has_mouse || alt_held || memory.viewport_max == {} {
 		return false
@@ -153,15 +196,10 @@ update_view_gizmo :: proc(memory: ^Game_Memory, input: ^platform.Input, viewport
 	if part == .None {
 		return false
 	}
-	if input.mouse[.Left].pressed {
-		switch part {
-		case .Direction:
-			directions := VIEW_GIZMO_DIRECTIONS
-			snap_viewport_camera(&memory.camera, directions[direction_index])
-		case .Projection:
-			memory.camera.orthographic = !memory.camera.orthographic
-		case .None:
-		}
+	if left_mouse.pressed {
+		editor.view_gizmo_pressed, editor.view_gizmo_pressed_direction = part, direction_index
+		editor.view_gizmo_press_position = input.mouse_position
+		editor.view_gizmo_dragging = false
 	}
 	return true
 }
@@ -204,6 +242,14 @@ draw_view_gizmo :: proc(memory: ^Game_Memory, renderer: ^render.Renderer) {
 
 	render.overlay_set_scissor(renderer, memory.viewport_min, memory.viewport_max)
 	defer render.overlay_clear_scissor(renderer)
+
+	// A faint disc while the mouse is over the gizmo, brighter while dragging it: the whole disc
+	// can be dragged to orbit, not just the knobs.
+	if editor.view_gizmo_hovered != .None || editor.view_gizmo_pressed != .None {
+		disc_alpha: f32 = 0.16 if editor.view_gizmo_dragging else 0.08
+		disc_radius := layout.background_radius
+		render.overlay_rect(renderer, layout.center - disc_radius, layout.center + disc_radius, {1, 1, 1, disc_alpha}, disc_radius)
+	}
 
 	for knob_index in view_gizmo_draw_order(layout) {
 		knob_center := layout.knob_centers[knob_index]
