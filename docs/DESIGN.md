@@ -690,11 +690,21 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
 - **Orbit always turns around the pivot,** and F puts the pivot on the selection, so after F,
   Alt + left drag (or dragging the view gizmo) orbits the framed object. Panning and flying
   move the pivot with the view, as in Unity.
-- **The grid wins depth ties with faces in its plane** (a cube's bottom on the ground, a Plane
-  object), instead of z-fighting with them. The grid's vertex shader scales its depth by
-  1 + 0.00002, moving it toward the camera by that fraction of its distance in perspective
-  (about 170 times reverse-Z's relative precision, at every distance) and about 2 cm near the
-  pivot in orthographic. Not the pipeline's depth bias: on a float depth buffer that's roughly
-  one absolute amount everywhere, too small up close and too big far away. Checked from below
-  the ground: before, the cube's bottom hid the grid lines (with stray specks); after, they
-  run across it.
+- **Soft depth test for the grid, after Blender** (its `overlay_grid_vert.glsl`). A face lying
+  in the grid's plane z-fought with it. First fix: nudge the grid toward the camera so it
+  always wins. Blender instead draws the grid several times at slightly different depths, from
+  just behind to just in front, each with a share of the opacity: a coplanar face keeps half
+  the passes (the grid shows on it at partial strength, steadily), and an object crossing the
+  grid gets a short fade instead of a hard, jagged cut. We draw 4 passes. Per-pass opacity is
+  1 - (1 - alpha)^(1/4), so the four blended over each other give exactly alpha. Blender adds
+  fixed amounts to clip-space z; for our reverse-Z, perspective scales the depth (a spread of
+  ±0.02% of the distance, the same safety margin at every distance) and orthographic adds a
+  small constant (±8 mm), since a relative spread there would be ±20 cm. Blender 3.6 did this
+  with one pass reading the scene depth texture; in WebGPU that needs a separate pass with a
+  read-only depth attachment, more awkward with MSAA, so we took the newer multi-pass approach.
+- **Grid lines are a width in pixels, with a colour and opacity** (Inspector › View). They were
+  a fraction of a cell (0.02), which made the 10-unit lines 0.2 units wide: 20-pixel grey bands
+  near the camera. Constant-pixel lines would merge into a solid sheet in the distance, so each
+  family of lines fades out as its cells shrink from 12 to 4 pixels apart, as Blender's grid
+  levels do. Widths under a pixel draw a fainter 1-pixel line (same average brightness, no
+  shimmer). The width is in window pixels; the renderer scales it by the render scale.

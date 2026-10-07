@@ -42,6 +42,7 @@ Camera :: struct {
 	view:         matrix[4, 4]f32,
 	projection:   matrix[4, 4]f32,
 	position:     [3]f32,
+	orthographic: bool,
 	viewport_min: [2]f32, // pixels; the part of the window the 3D scene is drawn into.
 	viewport_max: [2]f32, // Both zero = the whole window.
 }
@@ -49,7 +50,8 @@ Camera :: struct {
 Frame_Settings :: struct {
 	clear_color:     [4]f32,   // linear
 	show_grid:       bool,
-	grid_opacity:    [Grid_Plane]f32, // each plane's opacity; 0 skips it
+	grid_plane_opacity: [Grid_Plane]f32, // each plane's opacity; 0 skips it
+	grid_style:      Grid_Style,
 	capture:         bool,     // read this frame back to the CPU; end_frame returns the pixels
 	render_scale:    f32,      // scene resolution / viewport resolution, MIN..MAX_RENDER_SCALE; 0 = 1
 	upscaler:        Upscaler, // used when render_scale < 1
@@ -58,6 +60,17 @@ Frame_Settings :: struct {
 	low_latency:     bool,     // with vsync: pace frames so input is read just in time (core.Frame_Pacing)
 	msaa_samples:    u32,      // 1 (off) or 4; anything else means 1
 }
+
+// How the grid's lines look. The world axes keep their colours (X red, Y green, Z blue).
+Grid_Style :: struct {
+	color:             [3]f32, // linear
+	opacity:           f32,    // of the 1-unit lines; the 10-unit lines are 1.8 times as strong
+	line_width_pixels: f32,    // window pixels, at any distance; below 1 draws fainter 1-pixel lines
+}
+
+// The grid is drawn this many times, at slightly different depths, for a soft depth test where
+// geometry meets it (see grid.wgsl). Must match GRID_DEPTH_PASSES there.
+GRID_DEPTH_PASSES :: 4
 
 // The world planes a grid can lie in, through the origin. XZ is the ground; the editor fades in
 // XY and YZ for orthographic side views, where the ground is seen edge-on. The order must match
@@ -95,12 +108,14 @@ Frame_Uniforms :: struct {
 	camera_position: [3]f32,
 	gamma_correct:   f32,
 	light_direction: [3]f32,
-	padding:         f32,
+	orthographic:    f32,
 	viewport_size:   [2]f32, // pixels
-	padding_2:       [2]f32,
-	grid_opacity:    [4]f32, // per Grid_Plane (XZ, XY, YZ); w unused
+	grid_line_width: f32,    // render-target pixels
+	padding:         f32,
+	grid_plane_opacity: [4]f32, // per Grid_Plane (XZ, XY, YZ); w unused
+	grid_color:      [4]f32, // linear rgb, opacity
 }
-#assert(size_of(Frame_Uniforms) == 128)
+#assert(size_of(Frame_Uniforms) == 144)
 
 // One 2D overlay element in pixel coordinates (origin top-left): a rounded rectangle, a
 // rectangle outline, or a glyph sampled from the overlay atlas. Overlay colors are sRGB, as
@@ -523,7 +538,11 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		camera_position = camera.position,
 		gamma_correct   = 1 if renderer.gamma_correct else 0,
 		light_direction = linalg.normalize([3]f32{-0.4, -1, -0.3}),
-		grid_opacity    = {settings.grid_opacity[.XZ], settings.grid_opacity[.XY], settings.grid_opacity[.YZ], 0},
+		orthographic    = 1 if camera.orthographic else 0,
+		// The setting is in window pixels; the scene renders at render_scale times that size.
+		grid_line_width = settings.grid_style.line_width_pixels * (settings.render_scale if settings.render_scale > 0 else 1),
+		grid_plane_opacity = {settings.grid_plane_opacity[.XZ], settings.grid_plane_opacity[.XY], settings.grid_plane_opacity[.YZ], 0},
+		grid_color      = {settings.grid_style.color.r, settings.grid_style.color.g, settings.grid_style.color.b, settings.grid_style.opacity},
 		viewport_size   = surface_size,
 	}
 	wgpu.QueueWriteBuffer(renderer.queue, renderer.frame_buffer, 0, &frame_uniforms, size_of(frame_uniforms))
@@ -699,9 +718,10 @@ end_frame :: proc(renderer: ^Renderer, camera: Camera, settings: Frame_Settings)
 		// The grid is transparent, so it goes last, depth-tested against everything opaque.
 		if renderer.grid_pipeline != nil && settings.show_grid {
 			wgpu.RenderPassEncoderSetPipeline(scene_pass, renderer.grid_pipeline)
-			// One instance per Grid_Plane; the shader collapses planes with zero opacity.
+			// One instance per Grid_Plane per depth pass; the shader collapses planes with zero
+			// opacity.
 			wgpu.RenderPassEncoderSetBindGroup(scene_pass, 0, renderer.frame_group)
-			wgpu.RenderPassEncoderDraw(scene_pass, vertexCount = 6, instanceCount = len(Grid_Plane), firstVertex = 0, firstInstance = 0)
+			wgpu.RenderPassEncoderDraw(scene_pass, vertexCount = 6, instanceCount = len(Grid_Plane) * GRID_DEPTH_PASSES, firstVertex = 0, firstInstance = 0)
 		}
 
 		wgpu.RenderPassEncoderEnd(scene_pass)

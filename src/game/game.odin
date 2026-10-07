@@ -37,6 +37,7 @@ Game_Memory :: struct {
 	// Editor settings
 	show_grid:             bool,
 	grid_follows_view:     bool, // orthographic side views draw the grid in the plane they face
+	grid_style:            render.Grid_Style,
 	view_section_open:     bool,
 	camera_section_open:   bool,
 	rendering_section_open: bool,
@@ -70,6 +71,8 @@ Render_Settings :: struct {
 
 SCALE_ADJUST_INTERVAL_FRAMES :: 8 // let a few new GPU measurements arrive between adjustments
 
+DEFAULT_GRID_STYLE :: render.Grid_Style{color = {0.45, 0.45, 0.45}, opacity = 0.3, line_width_pixels = 1}
+
 game_memory: ^Game_Memory
 
 @(export)
@@ -86,6 +89,7 @@ game_init :: proc(window: platform.Native_Window, window_size: [2]i32, arguments
 	game_memory.camera = default_viewport_camera()
 	game_memory.show_grid = true
 	game_memory.grid_follows_view = true
+	game_memory.grid_style = DEFAULT_GRID_STYLE
 	game_memory.stats_section_open = true
 	game_memory.editor = {hierarchy_open = true, create_section_open = true, transform_section_open = true}
 	game_memory.gizmo.tool = .Move // Unity starts with the Move tool
@@ -282,6 +286,7 @@ game_update :: proc(input: ^platform.Input) -> bool {
 		view         = viewport_camera_view(game_memory.camera),
 		projection   = viewport_camera_projection(game_memory.camera, aspect_ratio),
 		position     = viewport_camera_eye(game_memory.camera),
+		orthographic = viewport_camera_lens(game_memory.camera).orthographic,
 		viewport_min = viewport_min,
 		viewport_max = viewport_max,
 	}
@@ -291,7 +296,8 @@ game_update :: proc(input: ^platform.Input) -> bool {
 	captured_pixels := render.end_frame(renderer, camera, {
 		clear_color     = {0.1, 0.105, 0.12, 1},
 		show_grid       = game_memory.show_grid,
-		grid_opacity    = grid_opacity_for_view(game_memory.camera) if game_memory.grid_follows_view else {.XZ = 1, .XY = 0, .YZ = 0},
+		grid_plane_opacity = grid_opacity_for_view(game_memory.camera) if game_memory.grid_follows_view else {.XZ = 1, .XY = 0, .YZ = 0},
+		grid_style      = game_memory.grid_style,
 		capture         = input.capture_requested,
 		render_scale    = game_memory.render_scale,
 		upscaler        = .Fsr if render_settings.use_fsr else .Bilinear,
@@ -350,6 +356,7 @@ effective_target_frame_rate :: proc(settings: Render_Settings, input: ^platform.
 //   --dynamic            dynamic resolution on
 //   --msaa=off           no multisample anti-aliasing
 //   --pick-center-of=Sphere  click the named object's centre once the view is laid out
+//   --grid-width=3       grid line width in pixels
 apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 	for argument in arguments {
 		if strings.has_prefix(argument, "--render-scale=") {
@@ -370,6 +377,10 @@ apply_developer_flags :: proc(settings: ^Render_Settings, arguments: []string) {
 		} else if strings.has_prefix(argument, "--pick-center-of=") {
 			editor := &game_memory.editor
 			editor.developer_pick_name_length = copy(editor.developer_pick_name_bytes[:], argument[len("--pick-center-of="):])
+		} else if strings.has_prefix(argument, "--grid-width=") {
+			if width, parsed := strconv.parse_f32(argument[len("--grid-width="):]); parsed {
+				game_memory.grid_style.line_width_pixels = clamp(width, 0.25, 6)
+			}
 		}
 	}
 }
@@ -427,6 +438,12 @@ draw_editor_ui :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 			ui.checkbox(user_interface, "Show grid", &memory.show_grid)
 			if memory.show_grid {
 				ui.checkbox(user_interface, "Grid faces side views (ortho)", &memory.grid_follows_view)
+				ui.color_field(user_interface, "Grid color", &memory.grid_style.color)
+				ui.number_field(user_interface, "Grid opacity", &memory.grid_style.opacity, 0.005, 0, 1, "%.2f")
+				ui.number_field(user_interface, "Line width", &memory.grid_style.line_width_pixels, 0.01, 0.25, 6, "%.2f px")
+				if ui.button(user_interface, "Reset grid style") {
+					memory.grid_style = DEFAULT_GRID_STYLE
+				}
 			}
 			// The checkbox only shows the setting; a click switches it with the animation.
 			orthographic := memory.camera.orthographic

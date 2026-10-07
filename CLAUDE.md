@@ -34,6 +34,7 @@ build\engine.exe --screenshot-after-reload    same, 30 frames after the first ho
   --switch-projection     start the animated switch to orthographic (capture it with
                           --screenshot-frame=N)
   --camera=45,14          start at this yaw and pitch, in degrees
+  --grid-width=3          grid line width in pixels
 ```
 
 - Odin: `dev-2026-09`, at `%LOCALAPPDATA%\Programs\odin` (the script finds it even when it isn't
