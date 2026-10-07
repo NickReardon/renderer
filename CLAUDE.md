@@ -6,7 +6,7 @@ also a learning project: the owner wants to understand data-oriented, procedural
 immediate-mode design, so code must be easy to read and every non-obvious decision explained.
 
 Read `docs/STYLE.md` for the full rules and reasoning, `docs/DESIGN.md` for past decisions, and
-`docs/REFERENCES.md` for sources.
+`docs/REFERENCES.md` for sources. Planned work is tracked in GitHub Issues (see below).
 
 ## Build and run (Windows)
 
@@ -140,18 +140,67 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
 - **Never commit to `main` directly.** `main` always builds and passes `build.bat test`.
 - **One branch per milestone or fix,** created from an up-to-date `main`:
   `feature/<name>` (e.g. `feature/undo`), `fix/<name>`, `docs/<name>`, `chore/<name>`.
-- **Commit on the branch as you go,** push it, and open a pull request with `gh pr create`. The
-  description says what changed and why, how it was verified (build, tests, captures), and
-  what's not done. End it with the Claude Code attribution line.
+- **For implementation and other code work,** commit on the task branch as you go, push it, and
+  open a pull request with `gh pr create`. The description says what changed and why, how it was
+  verified (build, tests, captures), and what's not done. End it with the Claude Code attribution
+  line. Proposals are written in the issue, and docs-first PRs are made on GitHub (see below).
 - **Merge only after the build and all tests pass and the owner approves.** The repository
   allows **squash merges only** (`gh pr merge --squash`): each pull request becomes one commit on
-  `main`, and GitHub deletes the branch. Afterwards: `git switch main`, `git pull`, and delete the
-  local branch.
+  `main`, and GitHub deletes the branch. Afterwards, remove the task worktree, delete its local
+  branch after confirming the squash merge, and pull GitHub `main` into the main checkout.
 - **Never force-push `main` or rewrite pushed history.**
 - **Commits use the GitHub no-reply address** (`32754140+NickReardon@users.noreply.github.com`,
   set in this repository's git config) because the owner's account blocks pushes that expose
   their email. Don't change `user.email`.
 - **`gh` is at `C:\Program Files\GitHub CLI\gh.exe`;** it may not be on the Bash tool's PATH.
+
+## Planned work: GitHub Issues
+
+Work that hasn't started is tracked as GitHub Issues
+(https://github.com/NickReardon/renderer/issues), one issue per unit of work, with what, why and
+roughly how. Several agents (and people) may work at once, on one machine or several, so the
+issue is where work is claimed and handed over:
+
+- **Before starting,** read the issue and its comments (`gh issue view <n> --comments`), and
+  check it isn't labeled `in-progress` (someone else has it).
+- **Design in the issue, approved before any work.** For work with design choices (features,
+  architecture), draft a high-level proposal in the issue: what we intend to build and why, the
+  main choice, and the options considered. Discuss it in the comments, and update the issue's
+  description as it settles. The owner approves it with a label that also picks the route:
+  - **`approved: implement`** (the usual case): build it, and put the docs in the same PR as
+    the code. They're written from what was actually built, so they start out true;
+  - **`approved: docs-first`** (large or cross-cutting designs): first a docs PR, then the
+    implementation. Use GitHub's web editor or API to create a `docs/<n>-<name>` branch and the
+    PR (not a local docs worktree, local file writes, or a push). Add a section to
+    `docs/DESIGN.md` (until #26 splits it) with **Status: Proposed** and a link to the issue.
+    Wait for the owner to approve and merge it; the implementation PR then fills in the detail
+    and sets the status to **Accepted**.
+
+  Without an `approved:` label, nobody starts the work. Plain bug fixes and trivial changes
+  skip the proposal. A design a later one replaces is marked **Superseded by …** (a link).
+- **Claim it:** add the `in-progress` label and comment that work has started
+  (`gh issue edit <n> --add-label in-progress`, `gh issue comment <n> --body "..."`). Add the
+  branch name to the issue when the branch is created.
+- **Name the branch with the issue number:** `feature/<n>-<name>` or `fix/<n>-<name>` (and
+  `docs/<n>-<name>` for a docs-first PR).
+- **Write `Fixes #<n>` in the implementation pull request,** so merging it closes the issue (a
+  docs-first PR says `Part of #<n>`).
+- **Stopping partway:** comment where things stand (what's done, what's failing, what's next)
+  and remove the `in-progress` label, so the next agent can pick it up.
+- **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
+  GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears. Workflow
+  labels: `approved: implement`, `approved: docs-first` (set only by the owner) and `in-progress`.
+- **The main checkout (`D:\Renderer`) stays on `main`.** Pull GitHub `main` into it before
+  creating a code worktree: `git -C D:/Renderer pull --ff-only origin main` (forward slashes:
+  in the Bash tool a backslash is an escape, so `D:\Renderer` becomes `D:Renderer`). Create each
+  implementation or other code task in its own worktree under `.claude/worktrees/`, branching
+  from that updated local `main` (`git -C D:/Renderer worktree add
+  .claude/worktrees/<task-name> -b <branch> main`). Never switch branches in the main checkout.
+  Before opening or updating a task PR, pull GitHub `main` into the main checkout again, merge
+  that `main` into the task branch in its worktree, resolve conflicts, and rerun affected checks.
+  Merge rather than rebase an already pushed task branch, so its history is not rewritten.
+  Remove the task worktree after its PR is merged (`git worktree remove`). Docs-first PRs are
+  made on GitHub directly, as described above.
 
 ## How to work
 
@@ -161,9 +210,16 @@ The repository is private on GitHub: https://github.com/NickReardon/renderer.
   "closed mesh stays closed").
 - **Ask before adding any dependency,** including another `vendor:` package.
 - **End each change with a short explanation** of why it is built the way it is, aimed at someone
-  learning these techniques. Record real design decisions (choices between alternatives) in
-  `docs/DESIGN.md`.
+  learning these techniques. Design decisions (choices between alternatives) are written up in
+  `docs/DESIGN.md` before the work, in a docs PR (see "Docs first" above), and corrected in
+  the implementation PR.
 - **Keep changes to one milestone at a time;** don't build ahead of what was asked.
+- **Ideas outside the current branch's scope become GitHub issues,** not part of the branch:
+  recommend them, file an issue (what, why, roughly how, an `area:` label), and keep the branch
+  to its milestone. Creating issues is fine; working on them waits for the owner.
+- **Prefer designs that hot-reload.** Avoid changing `src/host/`, `src/platform/` types, the
+  exported `game_*` procedures or `Game_Memory`'s layout when a game-side design works; when
+  one must change, say which reload level it needs (hot reload, F6 restart, full relaunch).
 - **Cite sources** in comments for non-obvious algorithms (see `docs/REFERENCES.md`).
 - **Entity model: hybrid fat struct** (`docs/STYLE.md` §15):
   - one `Entity` struct in a fixed pool with `Entity_Handle { index, generation }`; slot 0 is
