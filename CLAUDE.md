@@ -187,9 +187,10 @@ issue is where work is claimed and handed over:
 - **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
   GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears.
 - **The main checkout (`D:\Renderer`) stays on `main`.** Pull GitHub `main` into it before
-  creating a code worktree: `git -C D:\Renderer pull --ff-only origin main`. Create each
+  creating a code worktree: `git -C D:/Renderer pull --ff-only origin main` (forward slashes:
+  in the Bash tool a backslash is an escape, so `D:\Renderer` becomes `D:Renderer`). Create each
   implementation or other code task in its own worktree under `.claude/worktrees/`, branching
-  from that updated local `main` (`git -C D:\Renderer worktree add
+  from that updated local `main` (`git -C D:/Renderer worktree add
   .claude/worktrees/<task-name> -b <branch> main`). Never switch branches in the main checkout.
   Before opening or updating a task PR, pull GitHub `main` into the main checkout again, merge
   that `main` into the task branch in its worktree, resolve conflicts, and rerun affected checks.
