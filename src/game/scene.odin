@@ -15,6 +15,7 @@ package game
 import "core:fmt"
 import "core:math/linalg"
 import "core:strings"
+import "core:unicode"
 import "engine:core"
 import "engine:render"
 
@@ -204,24 +205,57 @@ entity_world_matrix :: proc(entity: ^Entity) -> matrix[4, 4]f32 {
 // "Cube (3) (1)". Every candidate is built to fit the 48-byte name buffer (the base is shortened
 // to leave room for the suffix), so uniqueness is checked on the name exactly as it will be
 // stored.
-unique_entity_name :: proc(scene: ^Scene, requested_name: string) -> string {
-	name_in_use :: proc(scene: ^Scene, name: string) -> bool {
-		for slot_index in 1 ..= scene.highest_entity_slot {
-			entity := &scene.entities[slot_index]
-			if .Alive in entity.flags && entity_name(entity) == name {
-				return true
-			}
-		}
-		return false
-	}
+unique_entity_name :: proc(scene: ^Scene, requested_name: string, excluding: Entity_Handle = {}) -> string {
 	base_name := strip_number_suffix(requested_name)
 	for number := 0; ; number += 1 {
 		suffix := fmt.tprintf(" (%d)", number) if number > 0 else ""
 		candidate := fmt.tprintf("%s%s", truncate_utf8(base_name, ENTITY_NAME_BYTES - len(suffix)), suffix)
-		if !name_in_use(scene, candidate) {
+		if !entity_name_in_use(scene, candidate, excluding) {
 			return candidate
 		}
 	}
+}
+
+// Names: letters (any script), digits, spaces and _ - . ( ). Kept to these so a name can later
+// be part of a file name or a reference typed by hand, on any system.
+NAME_PUNCTUATION :: "_-.()"
+
+name_character_allowed :: proc(character: rune) -> bool {
+	return unicode.is_letter(character) || unicode.is_digit(character) || character == ' ' || strings.contains_rune(NAME_PUNCTUATION, character)
+}
+
+// What renaming `entity` to `typed` would do. Spaces at either end are dropped. A name that's
+// empty or has a character outside name_character_allowed can't be used: `blocked`, with
+// `message` saying why. A name another entity already has gets the next free " (N)", as Create
+// and Ctrl+D do: `final_name` is that name, and `message` says so (not blocking). The entity's
+// own current name is never "taken". `final_name` and `message` use the temp allocator.
+check_entity_name :: proc(scene: ^Scene, entity: Entity_Handle, typed: string) -> (final_name: string, message: string, blocked: bool) {
+	trimmed := strings.trim_space(typed)
+	if trimmed == "" {
+		return "", "A name can't be empty.", true
+	}
+	for character in trimmed {
+		if !name_character_allowed(character) {
+			return "", fmt.tprintf("Names can't contain \"%c\". Use letters, digits, spaces and _ - . ( )", character), true
+		}
+	}
+	final_name = truncate_utf8(trimmed, ENTITY_NAME_BYTES)
+	if entity_name_in_use(scene, final_name, entity) {
+		final_name = unique_entity_name(scene, final_name, entity)
+		message = fmt.tprintf("Taken: will be named \"%s\".", final_name)
+	}
+	return
+}
+
+// Whether an entity other than `excluding` has this name.
+entity_name_in_use :: proc(scene: ^Scene, name: string, excluding: Entity_Handle = {}) -> bool {
+	for slot_index in 1 ..= scene.highest_entity_slot {
+		entity := &scene.entities[slot_index]
+		if .Alive in entity.flags && slot_index != int(excluding.index) && entity_name(entity) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // "Cube (12)" -> "Cube"; anything else is returned unchanged.

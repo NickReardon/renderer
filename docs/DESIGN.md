@@ -634,6 +634,7 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   elsewhere records the rename before that click starts its own action.
 - **Names may repeat, as in Unity** (Blender makes them unique). Only Create and Ctrl+D pick
   unique names; renaming takes what was typed, up to 48 bytes, cut at a character boundary.
+  (Changed later: renaming now makes names unique too; see "Name validation".)
   `set_entity_name` clears the rest of the buffer, so equal names are equal bytes and undo's
   byte comparison sees no change in a rename that ends where it started.
 - **One editor, in `Ui_State`, shared by text and number boxes** (`ui/text_edit.odin`). Only one
@@ -746,3 +747,30 @@ An outside review found eight bugs; all were confirmed in the code and fixed:
   family of lines fades out as its cells shrink from 12 to 4 pixels apart, as Blender's grid
   levels do. Widths under a pixel draw a fainter 1-pixel line (same average brightness, no
   shimmer). The width is in window pixels; the renderer scales it by the render scale.
+
+## Name validation
+
+- **Rules** (`check_entity_name` in `scene.odin`), applied to renaming in both the Hierarchy and
+  the Inspector:
+  - spaces at either end are dropped quietly;
+  - an empty name is refused;
+  - only letters (any script, so "Café" works), digits, spaces and `_ - . ( )` are allowed, so a
+    name can later be part of a file name or a reference typed by hand on any system;
+  - a name another object has gets the next free " (N)", as Create and Ctrl+D already did.
+- **Unique names, unlike Unity** (Blender's way). This reverses the earlier "names may repeat"
+  choice: a name will identify an object once scenes are saved and objects refer to each other.
+  The object being renamed never clashes with itself, so retyping its own name keeps it.
+- **Feedback while typing, not after.** The text box takes an optional check procedure and calls
+  it every frame while typing, so the message follows the text. A blocking problem (empty, a
+  character not allowed) turns the border red and shows the reason under the box; Enter and Tab
+  don't apply, Escape cancels, and a click elsewhere cancels too (the box can't stay open while
+  you work elsewhere). A taken name isn't an error: a grey note says what the name will become,
+  and applying makes it unique.
+- **The check is a procedure parameter, not stored.** Immediate-mode widgets keep nothing between
+  frames, so the box can't hold a validator; and the caller can't check before the call, because
+  the text it would check is typed during the call. A parameter called inside `text_box` (with a
+  `rawptr` for the caller's data: here the scene and the object) is like a sort's comparison
+  procedure; hard rule 3 forbids procedure *fields* used as virtual methods, not this.
+- **Hot reload:** nothing here changes `Game_Memory`, the host or the platform types. The error
+  colour is a constant (`TEXT_ERROR_COLOR`) rather than a `Theme` field, which would have changed
+  `Ui_State`'s layout and forced a restart.

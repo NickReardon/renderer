@@ -82,3 +82,48 @@ test_rename_is_one_undo_step :: proc(test: ^testing.T) {
 	redo(history, scene)
 	testing.expect_value(test, entity_name(renamed), "Crate")
 }
+
+@(test)
+test_check_entity_name :: proc(test: ^testing.T) {
+	scene := new(Scene)
+	defer free(scene)
+	cube_handle, _ := create_entity(scene, "Cube")
+	sphere_handle, _ := create_entity(scene, "Sphere")
+
+	check :: proc(scene: ^Scene, entity: Entity_Handle, typed: string) -> (final_name: string, message: string, blocked: bool) {
+		return check_entity_name(scene, entity, typed)
+	}
+
+	// Spaces at either end are dropped quietly.
+	final_name, message, blocked := check(scene, sphere_handle, "  Ball  ")
+	testing.expect(test, final_name == "Ball" && message == "" && !blocked, "trimmed, no message")
+
+	// Empty, or only spaces: can't be used.
+	_, message, blocked = check(scene, sphere_handle, "")
+	testing.expect(test, blocked && message != "", "an empty name is blocked, with a reason")
+	_, _, blocked = check(scene, sphere_handle, "   ")
+	testing.expect(test, blocked, "a name of only spaces is blocked")
+
+	// Letters of any script, digits, spaces and _ - . ( ) are fine; anything else is blocked and
+	// named in the message.
+	final_name, _, blocked = check(scene, sphere_handle, "Café_2-b.(old)")
+	testing.expect(test, final_name == "Café_2-b.(old)" && !blocked, "allowed characters pass, accents included")
+	_, message, blocked = check(scene, sphere_handle, "Ball/2")
+	testing.expectf(test, blocked && strings.contains(message, "\"/\""), "a slash is blocked and named (%q)", message)
+	_, _, blocked = check(scene, sphere_handle, "Ball\t2")
+	testing.expect(test, blocked, "a tab inside the name is blocked")
+
+	// Another entity's name gets the next free suffix, said in a note that doesn't block.
+	final_name, message, blocked = check(scene, sphere_handle, "Cube")
+	testing.expect(test, final_name == "Cube (1)" && !blocked && strings.contains(message, "Cube (1)"), "a taken name becomes unique, with a note")
+
+	// Keeping one's own name (or typing it again with spaces) isn't a clash.
+	final_name, message, blocked = check(scene, cube_handle, " Cube ")
+	testing.expect(test, final_name == "Cube" && message == "" && !blocked, "an entity's own name isn't taken")
+
+	// The suffix search skips the renamed entity too: renaming the Cube to "Sphere" gives
+	// "Sphere (1)", and nothing counts the Cube's old name.
+	final_name, _, _ = check(scene, cube_handle, "Sphere")
+	testing.expect_value(test, final_name, "Sphere (1)")
+	free_all(context.temp_allocator)
+}

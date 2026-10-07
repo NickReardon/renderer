@@ -448,10 +448,11 @@ draw_hierarchy_panel :: proc(memory: ^Game_Memory, input: ^platform.Input) {
 				handle := entity_handle(scene, slot_index)
 				if handle == editor.renaming_entity {
 					// F2 renaming: this row is a text box until typing is applied or cancelled.
-					new_name, result := ui.text_box(user_interface, "rename", entity_name(entity), ENTITY_NAME_BYTES, start_editing = editor.rename_starting)
+					name_check := Name_Check_Data{scene, handle}
+					new_name, result := ui.text_box(user_interface, "rename", entity_name(entity), ENTITY_NAME_BYTES, start_editing = editor.rename_starting, check = check_typed_name, check_data = &name_check)
 					editor.rename_starting = false
 					if result == .Applied {
-						set_entity_name(entity, new_name)
+						apply_typed_name(scene, handle, new_name)
 					}
 					if result != .Editing {
 						editor.renaming_entity = {}
@@ -487,8 +488,9 @@ draw_selection_inspector :: proc(memory: ^Game_Memory) {
 	case count == 1:
 		entity, _ := get_entity(scene, first)
 		// The name, editable in place as in Unity's Inspector header.
-		if new_name, result := ui.text_box(user_interface, "Name", entity_name(entity), ENTITY_NAME_BYTES, .Semibold); result == .Applied {
-			set_entity_name(entity, new_name)
+		name_check := Name_Check_Data{scene, first}
+		if new_name, result := ui.text_box(user_interface, "Name", entity_name(entity), ENTITY_NAME_BYTES, .Semibold, check = check_typed_name, check_data = &name_check); result == .Applied {
+			apply_typed_name(scene, first, new_name)
 		}
 		if ui.section(user_interface, "Transform", &memory.editor.transform_section_open) {
 			ui.inspect(user_interface, entity, Entity)
@@ -496,5 +498,26 @@ draw_selection_inspector :: proc(memory: ^Game_Memory) {
 	case:
 		ui.label(user_interface, fmt.tprintf("%d objects selected", count), .Semibold)
 		ui.label(user_interface, "Editing several objects at once comes later.", .Regular)
+	}
+}
+
+// Name checks for the rename boxes (the Hierarchy row, the Inspector's name). The text box calls
+// check_typed_name while typing, with a pointer to this; see check_entity_name for the rules.
+Name_Check_Data :: struct {
+	scene:  ^Scene,
+	entity: Entity_Handle,
+}
+
+check_typed_name :: proc(typed: string, data: rawptr) -> ui.Text_Check {
+	name_check := (^Name_Check_Data)(data)
+	_, message, blocked := check_entity_name(name_check.scene, name_check.entity, typed)
+	return {message = message, blocks = blocked}
+}
+
+// Applies a name the box let through: trimmed, and made unique if another entity has it.
+apply_typed_name :: proc(scene: ^Scene, handle: Entity_Handle, typed: string) {
+	final_name, _, blocked := check_entity_name(scene, handle, typed)
+	if entity, found := get_entity(scene, handle); found && !blocked {
+		set_entity_name(entity, final_name)
 	}
 }

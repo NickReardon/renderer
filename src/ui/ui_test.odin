@@ -54,7 +54,7 @@ run_frame :: proc(state: ^Ui_State, input: ^platform.Input, model: ^Test_Model) 
 			model.row_clicks += 1
 		}
 		inspect(state, &model.inspected, Inspected_Data)
-		edited, result := text_box(state, "Name", string(model.name_bytes[:model.name_length]), TEST_NAME_BYTES, start_editing = model.start_rename)
+		edited, result := text_box(state, "Name", string(model.name_bytes[:model.name_length]), TEST_NAME_BYTES, start_editing = model.start_rename, check = check_test_name)
 		if result == .Applied {
 			model.name_length = copy(model.name_bytes[:], edited)
 		}
@@ -583,6 +583,43 @@ test_text_box :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input
 	run_frame(state, input, model)
 	free_all(context.temp_allocator)
 
+	// --- A check procedure: a blocking message keeps Enter from applying and is shown under the
+	// box; a click elsewhere then cancels; a note (not blocking) is shown and lets typing apply.
+	model.name_length = copy(model.name_bytes[:], "Old")
+	model.start_rename = true
+	next_input(input)
+	run_frame(state, input, model)
+	typed(state, input, model, "a/b")
+	next_input(input)
+	commands = run_frame(state, input, model)
+	_, blocked_message_shown := find_text(commands, "No slashes.")
+	testing.expect(test, blocked_message_shown, "a blocking message is shown under the box")
+	key(state, input, model, .Enter)
+	testing.expect(test, model.name_result == .Editing && model_name(model) == "Old", "Enter doesn't apply blocked text")
+	key(state, input, model, .Tab)
+	testing.expect(test, model.name_result == .Editing && model_name(model) == "Old", "Tab doesn't apply blocked text either")
+	press_mouse(input, {600, 400}) // the viewport area
+	run_frame(state, input, model)
+	testing.expect(test, model.name_result == .Cancelled && model_name(model) == "Old", "a click elsewhere cancels blocked text")
+	testing.expect(test, !typed_value_applied(state), "a cancelled edit applies nothing")
+	release_mouse(input)
+	run_frame(state, input, model)
+	model.start_rename = true
+	next_input(input)
+	run_frame(state, input, model)
+	typed(state, input, model, "note")
+	next_input(input)
+	commands = run_frame(state, input, model)
+	_, note_shown := find_text(commands, "Just a note.")
+	testing.expect(test, note_shown, "a note is shown under the box")
+	key(state, input, model, .Enter)
+	testing.expect(test, model.name_result == .Applied && model_name(model) == "note", "a note doesn't block applying")
+	next_input(input)
+	commands = run_frame(state, input, model)
+	_, note_still_shown := find_text(commands, "Just a note.")
+	testing.expect(test, !note_still_shown, "the message goes away with the typing")
+	free_all(context.temp_allocator)
+
 	// --- A box that stops being drawn while typed into gives the keyboard back.
 	model.start_rename = true
 	next_input(input)
@@ -595,4 +632,18 @@ test_text_box :: proc(test: ^testing.T, state: ^Ui_State, input: ^platform.Input
 	run_frame(state, input, model)
 	testing.expect(test, state.edit_id == 0 && !wants_keyboard(state), "the keyboard is released when the box goes away")
 	free_all(context.temp_allocator)
+}
+
+// The test text box's check: a slash blocks, the text "note" gets a note that doesn't.
+@(private = "file")
+check_test_name :: proc(text: string, data: rawptr) -> Text_Check {
+	for character in text {
+		if character == '/' {
+			return {message = "No slashes.", blocks = true}
+		}
+	}
+	if text == "note" {
+		return {message = "Just a note."}
+	}
+	return {}
 }
