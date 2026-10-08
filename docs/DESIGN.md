@@ -7,7 +7,7 @@ Newest at the bottom. Add an entry whenever a decision would surprise someone re
 
 ## Language: Odin
 
-- **Chosen:** Odin (`dev-2026-09`).
+- **Chosen:** Odin (`dev-2026-10`; `dev-2026-09` can't link the game library on macOS, #54).
 - **Alternatives:** Jai (not publicly available), C, C++, Zig.
 - **Why:** built-in `#soa`, allocators and `context`, `bit_set`, enumerated arrays, `distinct`
   types and vector math suit data-oriented and procedural code. Bundled `vendor:` libraries

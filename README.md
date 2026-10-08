@@ -6,12 +6,23 @@ SDL3 and wgpu. It's also a study of data-oriented, procedural and immediate-mode
 
 ## Build and run (Windows)
 
-Needs Odin (`dev-2026-09` or later) and Visual Studio's C++ build tools.
+Needs Odin (`dev-2026-10` or later) and Visual Studio's C++ build tools.
 
 ```
 build.bat run      build everything and start the engine
 build.bat game     rebuild only the game code; the running engine hot-reloads it
 build.bat test     run the core and UI tests
+```
+
+## Build and run (macOS)
+
+Needs Odin (`dev-2026-10` or later), SDL3 (`brew install sdl3`) and wgpu-native v29.0.1.1;
+`CLAUDE.md` has the setup steps.
+
+```
+./build.sh run     build everything and start the engine
+./build.sh game    rebuild only the game code; the running engine hot-reloads it
+./build.sh test    run the core, UI and game tests
 ```
 
 ## Viewport controls (Unity scene-view style)
