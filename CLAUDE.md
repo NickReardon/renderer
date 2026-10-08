@@ -187,6 +187,14 @@ issue is where work is claimed and handed over:
   docs-first PR says `Part of #<n>`).
 - **Stopping partway:** comment where things stand (what's done, what's failing, what's next)
   and remove the `in-progress` label, so the next agent can pick it up.
+- **Large designs ship in iterations, as GitHub sub-issues** of the design issue (e.g. #36 →
+  #49–#52), each blocked by the one before. Separate issues are for work that is useful on its
+  own (#46, #47); iterations are useless without each other.
+  - the parent keeps the design and its approval: its `approved:` label covers every
+    sub-issue, and design changes found while building go into the parent's description;
+  - a sub-issue holds its scope and a "done when" check, is claimed with `in-progress`, gets
+    its own branch (`feature/<sub-issue>-<name>`) and PR, and the PR says `Fixes #<sub-issue>`;
+  - GitHub doesn't close the parent: close it by hand when its last sub-issue closes.
 - **Labels:** `area: hot-reload`, `area: text-editing`, `area: view`, `area: rendering`, plus
   GitHub's `bug` and `enhancement`. Add an `area:` label when a new area appears. Workflow
   labels: `approved: implement`, `approved: docs-first` (set only by the owner) and `in-progress`.
