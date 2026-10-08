@@ -14,6 +14,8 @@ package game
 
 import "core:fmt"
 import "core:math/linalg"
+import "core:math/rand"
+import "core:slice"
 import "core:strings"
 import "core:unicode"
 import "engine:core"
@@ -41,10 +43,17 @@ Entity_Flag :: enum u8 {
 }
 
 Entity :: struct {
-	generation:  u32,
-	flags:       bit_set[Entity_Flag; u32],
-	name_bytes:  [ENTITY_NAME_BYTES]u8,
-	name_length: u8,
+	generation:   u32,
+	flags:        bit_set[Entity_Flag; u32],
+	name_bytes:   [ENTITY_NAME_BYTES]u8,
+	name_length:  u8,
+	// Permanent identity, saved in scene files (#36). Handles are runtime-only: loading a scene
+	// gives every entity a fresh one. What's saved refers to an entity by its id instead. Random
+	// (never 0), so ids made by two people editing a scene in parallel don't clash.
+	id:           u64,
+	// Place in the Hierarchy: a core order key ("a0", "a1", ...). Entities sort by (key, id).
+	order_bytes:  [core.ORDER_KEY_MAX_BYTES]u8,
+	order_length: u8,
 
 	// Transform, on every entity. Rotation is Euler angles in degrees, applied Z first, then X,
 	// then Y (Unity's order), so values match what Unity users expect.
@@ -148,10 +157,13 @@ create_entity :: proc(scene: ^Scene, name: string) -> (Entity_Handle, ^Entity) {
 		if .Alive in entity.flags {
 			continue
 		}
+		order_buffer: [core.ORDER_KEY_MAX_BYTES]u8
+		order_key := order_key_after_last(scene, order_buffer[:])
 		scene.slot_generations[slot_index] += 1
 		generation := scene.slot_generations[slot_index]
-		entity^ = {generation = generation, flags = {.Alive}, scale = {1, 1, 1}, color = {0.8, 0.8, 0.8}}
+		entity^ = {generation = generation, flags = {.Alive}, id = new_entity_id(), scale = {1, 1, 1}, color = {0.8, 0.8, 0.8}}
 		set_entity_name(entity, name)
+		set_entity_order_key(entity, order_key)
 		scene.highest_entity_slot = max(scene.highest_entity_slot, slot_index)
 		return {index = u32(slot_index), generation = generation}, entity
 	}
@@ -193,6 +205,89 @@ entity_name :: proc(entity: ^Entity) -> string {
 set_entity_name :: proc(entity: ^Entity, name: string) {
 	entity.name_bytes = {}
 	entity.name_length = u8(copy(entity.name_bytes[:], truncate_utf8(name, ENTITY_NAME_BYTES)))
+}
+
+// A new random id. Two random 64-bit ids are the same with probability 2^-64; across a scene of
+// MAX_ENTITIES that's about 4096^2 / 2^65, or 5e-13 (the birthday bound), so they aren't checked
+// here. Loading refuses a scene with two equal ids, which hand-copied files can produce.
+new_entity_id :: proc() -> u64 {
+	for {
+		if id := rand.uint64(); id != 0 {
+			return id
+		}
+	}
+}
+
+entity_order_key :: proc(entity: ^Entity) -> string {
+	return string(entity.order_bytes[:entity.order_length])
+}
+
+// The unused tail is cleared, as for names, so equal keys give equal bytes for undo.
+set_entity_order_key :: proc(entity: ^Entity, key: string) {
+	ensure(len(key) <= core.ORDER_KEY_MAX_BYTES, "order key longer than its buffer")
+	entity.order_bytes = {}
+	entity.order_length = u8(copy(entity.order_bytes[:], key))
+}
+
+// Hierarchy order: by order key, then by id when two keys are equal (two people can give
+// entities the same key in parallel), so the order never depends on slots. Used for entities
+// and for entity records read from files.
+order_comes_before :: proc(first_key: string, first_id: u64, second_key: string, second_id: u64) -> bool {
+	if first_key != second_key {
+		return first_key < second_key
+	}
+	return first_id < second_id
+}
+
+// The key for a new entity at the end of the Hierarchy, written into `buffer`. New entities
+// always go last, even into a slot freed by a delete. Only an absurdly long last key (from a
+// hand-edited file) leaves no room after it; then every entity gets a short key again, in the
+// current order, which changes more entities but keeps the order.
+order_key_after_last :: proc(scene: ^Scene, buffer: []u8) -> string {
+	last := ""
+	for slot_index in 1 ..= scene.highest_entity_slot {
+		entity := &scene.entities[slot_index]
+		if .Alive in entity.flags && entity_order_key(entity) > last {
+			last = entity_order_key(entity)
+		}
+	}
+	if key, ok := core.order_key_after(buffer, last); ok {
+		return key
+	}
+	last = renumber_order_keys(scene)
+	key, ok := core.order_key_after(buffer, last)
+	ensure(ok, "a renumbered key always has room after it")
+	return key
+}
+
+// Gives every alive entity a fresh key ("a0", "a1", ...) in its current Hierarchy order.
+// Returns the last key given (pointing into that entity), or "" for an empty scene.
+renumber_order_keys :: proc(scene: ^Scene) -> string {
+	Order_Item :: struct {
+		slot_index: int,
+		key:        string,
+		id:         u64,
+	}
+	items := make([dynamic]Order_Item, context.temp_allocator)
+	for slot_index in 1 ..= scene.highest_entity_slot {
+		entity := &scene.entities[slot_index]
+		if .Alive in entity.flags {
+			append(&items, Order_Item{slot_index, entity_order_key(entity), entity.id})
+		}
+	}
+	slice.sort_by(items[:], proc(first, second: Order_Item) -> bool {
+		return order_comes_before(first.key, first.id, second.key, second.id)
+	})
+	buffer: [core.ORDER_KEY_MAX_BYTES]u8
+	last := ""
+	for item in items {
+		entity := &scene.entities[item.slot_index]
+		key, ok := core.order_key_after(buffer[:], last)
+		ensure(ok, "keys counted up from \"a0\" are short")
+		set_entity_order_key(entity, key)
+		last = entity_order_key(entity)
+	}
+	return last
 }
 
 // World matrix: scale, then rotate (Z, X, Y), then translate.
@@ -353,7 +448,8 @@ create_primitive_entity :: proc(scene: ^Scene, kind: Primitive_Kind, position: [
 	return handle
 }
 
-// Copies an entity (same mesh, transform, color) under a new unique name.
+// Copies an entity (same mesh, transform, color) under a new unique name. The copy is a new
+// entity: it gets its own id and goes last in the Hierarchy.
 duplicate_entity :: proc(scene: ^Scene, source_handle: Entity_Handle) -> Entity_Handle {
 	source, found := get_entity(scene, source_handle)
 	if !found {
@@ -361,9 +457,12 @@ duplicate_entity :: proc(scene: ^Scene, source_handle: Entity_Handle) -> Entity_
 	}
 	copy_of_source := source^ // copy before create_entity, which may reuse memory nearby
 	handle, entity := create_entity(scene, unique_entity_name(scene, entity_name(&copy_of_source)))
-	generation, name_bytes, name_length := entity.generation, entity.name_bytes, entity.name_length
+	fresh := entity^ // the identity create_entity gave the copy
 	entity^ = copy_of_source
-	entity.generation, entity.name_bytes, entity.name_length = generation, name_bytes, name_length
+	entity.generation = fresh.generation
+	entity.id = fresh.id
+	entity.name_bytes, entity.name_length = fresh.name_bytes, fresh.name_length
+	entity.order_bytes, entity.order_length = fresh.order_bytes, fresh.order_length
 	entity.flags -= {.Selected}
 	return handle
 }

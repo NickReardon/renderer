@@ -1,10 +1,11 @@
-// Tests for scene bookkeeping that needs no GPU: entity handles and names.
+// Tests for scene bookkeeping that needs no GPU: entity handles, names, ids and order keys.
 // Run with `build.bat test`.
 package game
 
 import "core:fmt"
 import "core:strings"
 import "core:testing"
+import "engine:core"
 
 @(test)
 test_entity_handles :: proc(test: ^testing.T) {
@@ -152,5 +153,83 @@ test_check_entity_name :: proc(test: ^testing.T) {
 	// "Sphere (1)", and nothing counts the Cube's old name.
 	final_name, _, _ = check(scene, cube_handle, "Sphere")
 	testing.expect_value(test, final_name, "Sphere (1)")
+	free_all(context.temp_allocator)
+}
+
+@(test)
+test_entity_ids_and_order_keys :: proc(test: ^testing.T) {
+	scene := new(Scene)
+	defer free(scene)
+
+	first_handle, first := create_entity(scene, "First")
+	second_handle, second := create_entity(scene, "Second")
+	_, third := create_entity(scene, "Third")
+	testing.expect(test, first.id != 0 && second.id != 0 && third.id != 0, "ids are never 0")
+	testing.expect(test, first.id != second.id && second.id != third.id && first.id != third.id, "every entity has its own id")
+	testing.expect_value(test, entity_order_key(first), "a0")
+	testing.expect_value(test, entity_order_key(second), "a1")
+	testing.expect_value(test, entity_order_key(third), "a2")
+
+	// A new entity goes last in the Hierarchy, even into the slot a deleted one freed.
+	destroy_entity(scene, second_handle)
+	reused_handle, reused := create_entity(scene, "Fourth")
+	testing.expect(test, reused_handle.index == second_handle.index, "the freed slot is reused")
+	testing.expect_value(test, entity_order_key(reused), "a3")
+
+	// Duplicate makes a new entity: its own id, last in the Hierarchy, the rest copied.
+	first.position = {1, 2, 3}
+	copy_handle := duplicate_entity(scene, first_handle)
+	copy_entity, _ := get_entity(scene, copy_handle)
+	testing.expect(test, copy_entity.id != 0 && copy_entity.id != first.id, "a duplicate gets a fresh id")
+	testing.expect_value(test, entity_order_key(copy_entity), "a4")
+	testing.expect_value(test, copy_entity.position, [3]f32{1, 2, 3})
+	testing.expect_value(test, entity_name(copy_entity), "First (1)")
+}
+
+@(test)
+test_undo_keeps_entity_ids :: proc(test: ^testing.T) {
+	scene := new(Scene)
+	defer free(scene)
+	history := new(Undo_History)
+	defer free(history)
+
+	handle, entity := create_entity(scene, "Cube")
+	id := entity.id
+	reset_undo_history(history, scene)
+
+	// Undoing a delete brings the entity back with the same id and key, not new ones.
+	destroy_entity(scene, handle)
+	testing.expect(test, commit_undo_step(history, scene), "a delete is an undo step")
+	undo(history, scene)
+	restored, found := get_entity(scene, handle)
+	testing.expect(test, found && restored.id == id, "undoing a delete restores the original id")
+	testing.expect_value(test, entity_order_key(restored), "a0")
+
+	// Redoing a create brings back the id the entity was created with.
+	created_handle, created := create_entity(scene, "Sphere")
+	created_id := created.id
+	testing.expect(test, commit_undo_step(history, scene), "a create is an undo step")
+	undo(history, scene)
+	redo(history, scene)
+	redone, redone_found := get_entity(scene, created_handle)
+	testing.expect(test, redone_found && redone.id == created_id, "redoing a create restores its id")
+}
+
+@(test)
+test_order_keys_renumber_when_there_is_no_room :: proc(test: ^testing.T) {
+	scene := new(Scene)
+	defer free(scene)
+
+	_, first := create_entity(scene, "First")
+	_, second := create_entity(scene, "Second")
+	// A hand-edited file can hold a key with no room after it in 32 bytes: the largest integer
+	// with a fraction of all 'z's. Then every entity gets a short key again, in the same order.
+	longest := strings.concatenate({"z", strings.repeat("z", 26, context.temp_allocator), "zzzzz"}, context.temp_allocator)
+	testing.expect(test, len(longest) == core.ORDER_KEY_MAX_BYTES && core.order_key_is_valid(longest), "the test key is valid and as long as allowed")
+	set_entity_order_key(second, longest)
+	_, third := create_entity(scene, "Third")
+	testing.expect_value(test, entity_order_key(first), "a0")
+	testing.expect_value(test, entity_order_key(second), "a1")
+	testing.expect_value(test, entity_order_key(third), "a2")
 	free_all(context.temp_allocator)
 }
