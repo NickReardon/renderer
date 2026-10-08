@@ -10,7 +10,9 @@ cd /d "%~dp0"
 where odin >nul 2>nul || set "PATH=%LOCALAPPDATA%\Programs\odin;%PATH%"
 where odin >nul 2>nul || (echo error: odin not found on PATH & exit /b 1)
 
-set "COMMON_FLAGS=-collection:engine=src -vet -debug"
+rem -linker:msvc keeps Visual Studio's link.exe: Odin dev-2026-10 made radlink the default on
+rem Windows, and switching linkers is a separate change from switching compilers.
+set "COMMON_FLAGS=-collection:engine=src -vet -debug -linker:msvc"
 rem -define:WGPU_SHARED=true links wgpu as wgpu_native.dll, so every loaded copy of the game
 rem DLL shares one wgpu instead of each carrying its own static copy.
 set "GAME_FLAGS=%COMMON_FLAGS% -define:WGPU_SHARED=true"

@@ -323,8 +323,8 @@ window_pixel_size :: proc(window: ^sdl.Window) -> [2]i32 {
 
 // OS window handles for the renderer to create its GPU surface from.
 native_window :: proc(window: ^sdl.Window) -> (platform.Native_Window, bool) {
-	properties := sdl.GetWindowProperties(window)
 	when ODIN_OS == .Windows {
+		properties := sdl.GetWindowProperties(window)
 		return platform.Native_Window_Win32{
 			instance_handle = sdl.GetPointerProperty(properties, sdl.PROP_WINDOW_WIN32_INSTANCE_POINTER, nil),
 			window_handle   = sdl.GetPointerProperty(properties, sdl.PROP_WINDOW_WIN32_HWND_POINTER, nil),
@@ -333,6 +333,7 @@ native_window :: proc(window: ^sdl.Window) -> (platform.Native_Window, bool) {
 		metal_view := sdl.Metal_CreateView(window)
 		return platform.Native_Window_Metal{metal_layer = sdl.Metal_GetLayer(metal_view)}, true
 	} else when ODIN_OS == .Linux {
+		properties := sdl.GetWindowProperties(window)
 		switch sdl.GetCurrentVideoDriver() {
 		case "wayland":
 			return platform.Native_Window_Wayland{
