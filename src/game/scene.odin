@@ -346,6 +346,9 @@ truncate_utf8 :: proc(text: string, maximum_bytes: int) -> string {
 create_primitive_entity :: proc(scene: ^Scene, kind: Primitive_Kind, position: [3]f32, color: [3]f32) -> Entity_Handle {
 	primitive_names := PRIMITIVE_NAMES
 	handle, entity := create_entity(scene, unique_entity_name(scene, primitive_names[kind]))
+	if handle.index == 0 {
+		return {} // the pool is full; leave the reserved nil entity untouched
+	}
 	entity.flags += {.Has_Mesh}
 	entity.mesh = scene.primitive_meshes[kind]
 	entity.position = position
@@ -361,6 +364,9 @@ duplicate_entity :: proc(scene: ^Scene, source_handle: Entity_Handle) -> Entity_
 	}
 	copy_of_source := source^ // copy before create_entity, which may reuse memory nearby
 	handle, entity := create_entity(scene, unique_entity_name(scene, entity_name(&copy_of_source)))
+	if handle.index == 0 {
+		return {} // create_entity returns the nil slot on failure, which must never be written
+	}
 	generation, name_bytes, name_length := entity.generation, entity.name_bytes, entity.name_length
 	entity^ = copy_of_source
 	entity.generation, entity.name_bytes, entity.name_length = generation, name_bytes, name_length

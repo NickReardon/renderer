@@ -8,6 +8,38 @@ import "core:testing"
 import "engine:core"
 import "engine:platform"
 
+@(test)
+test_gizmo_transforms_full_selection :: proc(test: ^testing.T) {
+	memory := make_gizmo_test_memory(.Scale)
+	defer free(memory)
+	for _ in 2 ..< MAX_ENTITIES {
+		_, entity := create_entity(&memory.scene, "Object")
+		entity.flags += {.Selected}
+	}
+	frame := compute_gizmo_frame(memory)
+	press := mouse_input(frame.origin_pixel, true, true)
+	update_gizmo(memory, &press, true)
+	testing.expect_value(test, memory.gizmo.active, Gizmo_Part.Center)
+	testing.expect_value(test, memory.gizmo.dragged_count, MAX_ENTITIES - 1)
+
+	drag := mouse_input(frame.origin_pixel + {UNIFORM_SCALE_POINTS_PER_DOUBLING, 0}, false, true)
+	update_gizmo(memory, &drag, true)
+	for slot_index in 1 ..< MAX_ENTITIES {
+		scale := memory.scene.entities[slot_index].scale
+		testing.expectf(test, linalg.length(scale - [3]f32{2, 2, 2}) < 1e-4,
+			"selected entity %d must scale with the group, got %v", slot_index, scale)
+	}
+
+	// Cancellation restores every selected entity, including those above the old drag limit.
+	escape := drag
+	escape.keys[.Escape] = {pressed = true, down = true}
+	update_gizmo(memory, &escape, true)
+	testing.expect_value(test, memory.gizmo.active, Gizmo_Part.None)
+	for slot_index in 1 ..< MAX_ENTITIES {
+		testing.expect_value(test, memory.scene.entities[slot_index].scale, [3]f32{1, 1, 1})
+	}
+}
+
 // A scene with one selected cube at the origin, the default camera, and a 1000 x 800 view.
 @(private = "file")
 make_gizmo_test_memory :: proc(tool: Transform_Tool) -> ^Game_Memory {

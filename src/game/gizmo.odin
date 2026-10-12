@@ -74,7 +74,7 @@ HANDLE_POSITION_LABELS :: [Handle_Position]string{
 	.Center = "Center",
 }
 
-MAX_DRAGGED_ENTITIES      :: 1024
+MAX_DRAGGED_ENTITIES      :: MAX_ENTITIES - 1 // every usable entity slot can be selected
 GIZMO_SIZE_POINTS         :: 110 // handle length on screen
 GIZMO_LINE_POINTS         :: 2.5
 GIZMO_HIT_DISTANCE_POINTS :: 9
@@ -350,7 +350,7 @@ begin_gizmo_drag :: proc(memory: ^Game_Memory, frame: Gizmo_Frame, part: Gizmo_P
 	gizmo.dragged_count = 0
 	for slot_index in 1 ..= scene.highest_entity_slot {
 		entity := &scene.entities[slot_index]
-		if .Alive in entity.flags && .Selected in entity.flags && gizmo.dragged_count < MAX_DRAGGED_ENTITIES {
+		if .Alive in entity.flags && .Selected in entity.flags {
 			gizmo.dragged[gizmo.dragged_count] = {
 				handle   = entity_handle(scene, slot_index),
 				position = entity.position,

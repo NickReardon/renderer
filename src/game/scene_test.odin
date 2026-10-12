@@ -7,6 +7,34 @@ import "core:strings"
 import "core:testing"
 
 @(test)
+test_entity_creation_when_pool_is_full :: proc(test: ^testing.T) {
+	scene := new(Scene)
+	defer free(scene)
+	for _ in 1 ..< MAX_ENTITIES {
+		create_entity(scene, "Object")
+	}
+	source_handle := entity_handle(scene, 1)
+	source_before := scene.entities[1]
+
+	primitive := create_primitive_entity(scene, .Cube, {1, 2, 3}, {0.2, 0.4, 0.6})
+	testing.expect_value(test, primitive, Entity_Handle{})
+	testing.expect_value(test, scene.entities[0], Entity{})
+
+	duplicate := duplicate_entity(scene, source_handle)
+	testing.expect_value(test, duplicate, Entity_Handle{})
+	testing.expect_value(test, scene.entities[0], Entity{})
+	testing.expect_value(test, scene.entities[1], source_before)
+
+	// Exhaustion must leave the pool usable: freeing a slot lets the next creation succeed.
+	destroy_entity(scene, source_handle)
+	replacement := create_primitive_entity(scene, .Cube, {}, {1, 1, 1})
+	replacement_entity, found := get_entity(scene, replacement)
+	testing.expect(test, found && replacement.index == source_handle.index, "creation reuses the freed slot")
+	testing.expect(test, replacement.generation != source_handle.generation, "the old handle stays invalid")
+	testing.expect(test, .Has_Mesh in replacement_entity.flags, "successful creation still sets primitive fields")
+}
+
+@(test)
 test_entity_handles :: proc(test: ^testing.T) {
 	scene := new(Scene)
 	defer free(scene)
